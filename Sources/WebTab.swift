@@ -8,6 +8,12 @@ final class WebTab: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDown
     let spec: TabSpec
 
     private let notifyHandler: NotifyHandler
+    /// True when the web view came from WebKit's popup callback.
+    private let isAdopted: Bool
+    /// The tab that opened this one; refreshed when this popup closes.
+    weak var openerTab: WebTab?
+    /// The tab this one opened, if any, so closing it can unblock the opener.
+    weak var openedTab: WebTab?
     private var titleObservation: NSKeyValueObservation?
     private var downloads: Set<WKDownload> = []
     private var popups: [WKWebView] = []
@@ -26,14 +32,26 @@ final class WebTab: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDown
     /// The web view is built here rather than in `loadView()` on purpose: a tab
     /// that has never been selected still has to be able to navigate, and
     /// background tabs are exactly what makes the tab bar feel instant.
-    init(spec: TabSpec) {
+    /// `adopted` is a web view WebKit created for us in
+    /// `createWebViewWithConfiguration:`. It has to be used as-is: it is the
+    /// only web view WebKit will link to the calling page, and a popup built
+    /// from a configuration of our own gets `window.opener === null`, which
+    /// silently breaks Google sign-in (the popup finishes, the opener never
+    /// hears about it and stays on the login screen).
+    init(spec: TabSpec, adopted: WKWebView? = nil) {
         self.spec = spec
         let handler = NotifyHandler()
         self.notifyHandler = handler
-        self.webView = WebTab.makeWebView(handler: handler)
+        self.isAdopted = adopted != nil
+        if let adopted {
+            self.webView = adopted
+        } else {
+            self.webView = WebTab.makeWebView(handler: handler)
+        }
         super.init(nibName: nil, bundle: nil)
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        webView.allowsBackForwardNavigationGestures = true
         titleObservation = webView.observe(\.title, options: [.initial, .new]) { [weak self] _, _ in
             guard let self else { return }
             self.onTitleChanged?(self)
@@ -164,8 +182,21 @@ final class WebTab: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDown
             decisionHandler(.allow); return
         }
 
-        // Non-web schemes (mailto:, tel:, obsidian:, vsCode…) belong to the OS.
-        if !(url.scheme?.lowercased().hasPrefix("http") ?? false) {
+        // about:blank is not a destination, it is a placeholder for a window
+        // that script is about to navigate. Handing it to LaunchServices is how
+        // you end up with "no application set to open the URL about:blank".
+        if Self.isBlank(url) {
+            if navigationAction.targetFrame == nil {
+                TabsController.current?.openPopup(url.absoluteString, opener: self, configuration: nil)
+                decisionHandler(.cancel); return
+            }
+            decisionHandler(.allow); return
+        }
+
+        // Other non-web schemes (mailto:, tel:, obsidian:, vscode…) belong to the OS.
+        let scheme = url.scheme?.lowercased() ?? ""
+        if !scheme.hasPrefix("http") {
+            if scheme == "blob" || scheme == "data" { decisionHandler(.allow); return }
             NSWorkspace.shared.open(url)
             decisionHandler(.cancel); return
         }
@@ -182,13 +213,14 @@ final class WebTab: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDown
 
         let host = url.host ?? ""
         let isTargetless = navigationAction.targetFrame == nil
+        _ = isTargetless
 
         if AppRuntime.shared.config.isAllowed(host: host) {
             // `target="_blank"` on a Google host: open a tab here instead of a
             // stray popup window. OAuth popups need this to be a real window-ish
             // context, which a tab is.
             if isTargetless {
-                TabsController.current?.openPopupTab(url.absoluteString, opener: webView)
+                TabsController.current?.openPopup(url.absoluteString, opener: self, configuration: nil)
                 decisionHandler(.cancel); return
             }
             decisionHandler(.allow); return
@@ -217,6 +249,11 @@ final class WebTab: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDown
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         didLoad = true
+        // A web view WebKit created for a popup already has its configuration,
+        // so the notification shim could not be injected at document start.
+        if isAdopted, AppRuntime.shared.config.notificationsShim {
+            webView.evaluateJavaScript(Notifier.installScript, completionHandler: nil)
+        }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -264,16 +301,40 @@ final class WebTab: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDown
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures)
         -> WKWebView? {
-        guard let url = navigationAction.request.url else { return nil }
+        // No URL or a blank one: create the window and let the opener navigate
+        // it. Loading anything here would replace the document WebKit just set up.
+        guard let url = navigationAction.request.url, !Self.isBlank(url) else {
+            return TabsController.current?.openPopup("about:blank", opener: self, configuration: configuration)
+        }
         if !AppRuntime.shared.config.isAllowed(host: url.host ?? ""), !AppRuntime.shared.config.isMeet(url) {
             NSWorkspace.shared.open(url)
             return nil
         }
-        return TabsController.current?.openPopupTab(url.absoluteString, opener: self.webView)
+        return TabsController.current?.openPopup(url.absoluteString, opener: self, configuration: configuration)
     }
 
     func webViewDidClose(_ webView: WKWebView) {
         TabsController.current?.closePopup(for: webView)
+    }
+
+    /// Same test, for the string form used in configuration.
+    static func isBlankString(_ string: String) -> Bool {
+        URL(string: string).map(isBlank) ?? string.isEmpty
+    }
+
+    /// True when this tab is sitting on a Google sign-in page, i.e. waiting for
+    /// a popup to finish authenticating.
+    var isWaitingAtSignIn: Bool {
+        let url = currentURLString.lowercased()
+        return url.contains("accounts.google.") || url.contains("/signin") || url.contains("service=cl")
+    }
+
+    /// `about:blank`, `about:srcdoc`, and any scheme-less empty URL.
+    static func isBlank(_ url: URL) -> Bool {
+        if url.host != nil { return false }
+        let scheme = url.scheme?.lowercased() ?? ""
+        if scheme == "about" { return true }
+        return url.absoluteString.isEmpty
     }
 
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,

@@ -17,6 +17,7 @@ enum SelfTest {
         testAccountURLs()
         testTabsWithoutLoading()
         testNotificationShim()
+        testBlankPopupsAndSignInSection()
         testMenus()
 
         if failures.isEmpty {
@@ -147,6 +148,33 @@ enum SelfTest {
         expect(Notifier.installScript.contains("class GCalNotification"), "shim defines a Notification replacement")
         expectEqual(Notifier.makeUserScript(enabled: false).source, "", "disabled shim injects nothing")
         expectEqual(Notifier.makeUserScript(enabled: true).injectionTime, .atDocumentStart, "shim runs at document start")
+    }
+
+    /// Regression cover for the two sign-in failures: an `about:blank` popup
+    /// handed to LaunchServices ("no application set to open the URL"), and a
+    /// popup that never linked back to its opener, leaving the opener stuck.
+    private static func testBlankPopupsAndSignInSection() {
+        expect(WebTab.isBlank(URL(string: "about:blank")!), "about:blank is blank")
+        expect(WebTab.isBlankString("about:blank"), "about:blank recognised as a string")
+        expect(!WebTab.isBlank(URL(string: "https://accounts.google.com/v3/signin")!), "a real URL is not blank")
+        expect(!WebTab.isBlankString("https://mail.google.com/mail/u/0/"), "gmail url is not blank")
+
+        let tabs = TabsController(specs: [TabSpec.defaults[0]])
+        let opener = tabs.tabs[0]
+        let popup = tabs.openPopup("about:blank", opener: opener, configuration: nil)
+        expect(popup != nil, "blank window.open yields a usable web view")
+        expectEqual(tabs.tabCount, 2, "blank popup becomes a tab instead of an error dialog")
+        let popupTab = tabs.tabs[1]
+        expect(popupTab.openerTab === opener, "popup knows who opened it")
+        expect(opener.openedTab === popupTab, "opener tracks the popup it opened")
+        expect(!popupTab.didLoad, "blank popup starts no navigation of its own")
+
+        var waiting = TabSpec.defaults[0]
+        waiting.url = "https://accounts.google.com/v3/signin/identifier?continue=https://calendar.google.com/"
+        let loginTab = tabs.openPopup(waiting.url, opener: nil, configuration: nil).flatMap { _ in tabs.tabs.last }
+        expect(loginTab?.isWaitingAtSignIn ?? false, "a tab on accounts.google.com counts as waiting")
+        let calendar = tabs.tabs[0]
+        expect(!calendar.isWaitingAtSignIn, "a tab showing the month view is not waiting")
     }
 
     private static func testMenus() {

@@ -89,8 +89,9 @@ final class TabsController: NSViewController, NSToolbarDelegate,
     // MARK: - Tab lifecycle
 
     @discardableResult
-    private func append(spec: TabSpec, popup: Bool, activate: Bool = true) -> WebTab {
-        let tab = WebTab(spec: spec)
+    private func append(spec: TabSpec, popup: Bool, activate: Bool = true,
+                        adopted: WKWebView? = nil) -> WebTab {
+        let tab = WebTab(spec: spec, adopted: adopted)
         tab.isPopupTab = popup
         tab.onTitleChanged = { [weak self] updated in self?.titleChanged(for: updated) }
         tabs.append(tab)
@@ -99,7 +100,11 @@ final class TabsController: NSViewController, NSToolbarDelegate,
             tab.view.frame = host.bounds
             tab.view.autoresizingMask = [.width, .height]
         }
-        if loadsPages { tab.load(spec.url) }
+        // An adopted web view is already showing the document WebKit prepared;
+        // loading the requested URL over the top would discard it, and loading
+        // about:blank at all is meaningless.
+        let alreadyShowsIt = adopted != nil
+        if loadsPages, !alreadyShowsIt, !WebTab.isBlankString(spec.url) { tab.load(spec.url) }
         syncSegments()
         if activate { select(tabs.count - 1) }
         return tab
@@ -112,11 +117,17 @@ final class TabsController: NSViewController, NSToolbarDelegate,
         if isViewLoaded { view.window?.makeFirstResponder(selectedTab?.webView) }
     }
 
-    /// `window.open` from a Google page lands here.
+    /// `window.open` from a Google page lands here. `configuration` is the one
+    /// WebKit handed to `createWebViewWith`; a web view built from it is the only
+    /// one that keeps `window.opener`, so sign-in popups can report back.
     @discardableResult
-    func openPopupTab(_ urlString: String, opener: WKWebView?) -> WKWebView? {
-        let spec = TabSpec(label: "Loading…", url: urlString, symbol: "safari")
-        return append(spec: spec, popup: true).webView
+    func openPopup(_ urlString: String, opener: WebTab?, configuration: WKWebViewConfiguration?) -> WKWebView? {
+        let adopted = configuration.map { WKWebView(frame: NSRect(x: 0, y: 0, width: 1100, height: 800), configuration: $0) }
+        let spec = TabSpec(label: "Sign in", url: urlString, symbol: "key")
+        let tab = append(spec: spec, popup: true, adopted: adopted)
+        tab.openerTab = opener
+        opener?.openedTab = tab
+        return tab.webView
     }
 
     func closePopup(for webView: WKWebView) {
@@ -126,6 +137,14 @@ final class TabsController: NSViewController, NSToolbarDelegate,
 
     private func remove(_ tab: WebTab) {
         guard let index = tabs.firstIndex(where: { $0 === tab }) else { return }
+        // A finished sign-in popup usually just closes. If the tab that opened it
+        // is still parked on Google's login page, nudge it — it was waiting for a
+        // signal that may never arrive when the popup was not fully linked.
+
+        if tab.isPopupTab, let opener = tab.openerTab, opener !== tab, opener.isWaitingAtSignIn {
+            opener.webView.reloadFromOrigin()
+        }
+        tab.openedTab = nil
         tab.view.removeFromSuperview()
         tabs.remove(at: index)
         selectedIndex = tabs.isEmpty ? -1 : min(index, tabs.count - 1)
