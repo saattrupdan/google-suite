@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
 # Terminal launcher. Usage:
 #   gcal                      # open (or activate) the app
-#   gcal --url <url>          # first tab shows <url> (only on a cold start)
+#   gcal --mail               # ... and show Mail  (works if already running too)
+#   gcal --calendar           # ... and show Calendar
 #   gcal --selftest           # offline checks
 set -euo pipefail
 APP_NAME="Google Suite"
 
 # Name lookup can resolve to the build tree instead of the installed copy, so
 # prefer the explicit /Applications path.
+# A warm instance never sees --args, so the jump request goes through the
+# rendezvous file the app reads on activation.
+case " $* " in
+  *" --mail "*|*" --calendar "*)
+    mkdir -p "$HOME/.config/gcal-app"
+    case " $* " in *" --calendar "*) printf calendar > "$HOME/.config/gcal-app/reveal" ;;
+                    *)                printf mail     > "$HOME/.config/gcal-app/reveal" ;;
+    esac ;;
+esac
+
 if [[ -d "/Applications/$APP_NAME.app" ]]; then
   exec open "/Applications/$APP_NAME.app" --args "$@"
 elif [[ -x "$HOME/gitsky/gcal-app/$APP_NAME.app/Contents/MacOS/$APP_NAME" ]]; then

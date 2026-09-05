@@ -9,7 +9,6 @@ final class AppRuntime {
     var config = Config()
 
     /// Parsed once from the command line in `main.swift`.
-    var startURL: String?
     var smokeMode = false
 
     private init() {}

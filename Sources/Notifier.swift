@@ -75,16 +75,18 @@ enum Notifier {
     /// Delivers one native notification. No-ops when not running from a real
     /// app bundle (a bare executable has no bundle identifier, and
     /// `UNUserNotificationCenter` refuses to work there).
-    static func deliver(title: String, body: String) {
+    static func deliver(title: String, body: String, target: String? = nil) {
         guard Bundle.main.bundleIdentifier != nil else { return }
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in
             switch settings.authorizationStatus {
             case .authorized, .provisional, .ephemeral:
-                center.add(request(for: title, body: body), withCompletionHandler: nil)
+                center.add(request(for: title, body: body, target: target), withCompletionHandler: nil)
             case .notDetermined:
                 center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
-                    if granted { center.add(request(for: title, body: body), withCompletionHandler: nil) }
+                    if granted {
+                        center.add(request(for: title, body: body, target: target), withCompletionHandler: nil)
+                    }
                 }
             default:
                 break
@@ -92,11 +94,12 @@ enum Notifier {
         }
     }
 
-    private static func request(for title: String, body: String) -> UNNotificationRequest {
+    private static func request(for title: String, body: String, target: String?) -> UNNotificationRequest {
         let content = UNMutableNotificationContent()
         content.title = title.isEmpty ? "Google" : title
         content.body = body
         content.sound = .default
+        if let target { content.userInfo = ["goto": target] }
         return UNNotificationRequest(
             identifier: UUID().uuidString, content: content, trigger: nil)
     }
@@ -107,8 +110,12 @@ enum Notifier {
 final class NotifyHandler: NSObject, WKScriptMessageHandler {
     func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == Notifier.handlerName, let dict = message.body as? [String: Any] else { return }
+        let host = message.frameInfo.securityOrigin.host.lowercased()
+        // Gmail new-mail alerts are already covered by the poller; showing both
+        // would mean two banners for one message.
+        if MailWatcher.shared.absorbsInPageNotifications(host: host) { return }
         let title = (dict["title"] as? String) ?? "Google"
         let body = (dict["body"] as? String) ?? ""
-        Notifier.deliver(title: title, body: body)
+        Notifier.deliver(title: title, body: body, target: host.contains("calendar") ? "calendar" : "mail")
     }
 }

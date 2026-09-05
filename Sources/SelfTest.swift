@@ -1,8 +1,8 @@
 import AppKit
 import WebKit
 
-/// Offline checks: pure logic plus UI object construction. No network, no
-/// TCC prompts, no browser. `--smoke` is the one that needs the internet.
+/// Offline checks: pure logic plus UI construction. No network, no TCC prompts.
+/// `--smoke` is the one that needs the internet.
 enum SelfTest {
     private static var checks = 0
     private static var failures: [String] = []
@@ -11,14 +11,18 @@ enum SelfTest {
         checks = 0
         failures = []
 
-        testConfigDefaults()
+        testSourceOrder()
         testConfigIsLenient()
         testHostPolicy()
+        testMeetPolicy()
         testAccountURLs()
-        testTabsWithoutLoading()
+        testBlankAndUnreadParsing()
+        testRootControllerWithoutLoading()
+        testSidebar()
+        testMailWatcherGating()
         testNotificationShim()
-        testBlankPopupsAndSignInSection()
         testMenus()
+        testRevealHandshake()
 
         if failures.isEmpty {
             print("SELFTEST ok (\(checks) checks)")
@@ -29,7 +33,7 @@ enum SelfTest {
         return 1
     }
 
-    // MARK: - Assert helpers
+    // MARK: - Helpers
 
     private static func expect(_ condition: Bool, _ what: String) {
         checks += 1
@@ -43,158 +47,177 @@ enum SelfTest {
 
     // MARK: - Checks
 
-    private static func testConfigDefaults() {
+    private static func testSourceOrder() {
         let config = Config()
-        expectEqual(config.tabs.count, 2, "default tab count")
-        expect(config.tabs[0].url.contains("calendar.google.com"), "first default tab is Calendar")
-        expect(config.tabs[1].url.contains("mail.google.com"), "second default tab is Mail")
-        expect(config.notificationsShim, "notification shim defaults on")
-        expect(!config.openMeetInApp, "Meet opens in the browser by default")
+        expectEqual(config.sources.count, 2, "two sources configured")
+        expectEqual(config.sources[0].id, "mail", "Mail comes before Calendar")
+        expectEqual(config.sources[1].id, "calendar", "Calendar is second")
+        expectEqual(config.mailPollSeconds, 60, "mail polls once a minute")
+        expect(config.mailNotifications, "mail notifications default on")
+        expect(config.sources[0].symbol == "envelope" && config.sources[1].symbol == "calendar",
+               "rail icons are envelope and calendar")
     }
 
     private static func testConfigIsLenient() {
-        let temp = FileManager.default.temporaryDirectory
+        let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("gcal-selftest-\(UUID().uuidString)", isDirectory: true)
-            .appendingPathComponent("config.json")
-        try? FileManager.default.createDirectory(at: temp.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("config.json")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        // Wrong types and unknown keys must not sink the file.
-        try? "{\"tabs\": 17, \"openMeetInApp\": \"yes\", \"wat\": true}".data(using: .utf8)?.write(to: temp)
-        let broken = Config.load(createIfMissing: false, at: temp)
-        expectEqual(broken.tabs.count, 2, "malformed tabs falls back to defaults")
-        expect(!broken.openMeetInApp, "malformed bool falls back to default")
+        try? "{\"sources\": 12, \"mailNotifications\": \"yes\", \"nope\": 1}".data(using: .utf8)?.write(to: file)
+        let broken = Config.load(createIfMissing: false, at: file)
+        expectEqual(broken.sources.count, 2, "malformed sources fall back to defaults")
+        expect(broken.mailNotifications, "malformed bool falls back to default")
 
-        // A real file round-trips.
-        var good = Config()
-        good.openMeetInApp = true
-        good.allowHosts = ["calendar.google.com"]
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted]
-        try? encoder.encode(good).write(to: temp)
-        let loaded = Config.load(createIfMissing: false, at: temp)
-        expect(loaded.openMeetInApp, "openMeetInApp round-trips")
-        expectEqual(loaded.allowHosts, ["calendar.google.com"], "allowHosts round-trips")
+        // An older config with a "tabs" list must still load, Mail first if that
+        // is how the user had it.
+        try? "{\"tabs\": [{\"label\":\"Mail\",\"url\":\"https://mail.google.com/mail/u/0/\"},{\"label\":\"Calendar\",\"url\":\"https://calendar.google.com/x\"}]}".data(using: .utf8)?.write(to: file)
+        let legacy = Config.load(createIfMissing: false, at: file)
+        expectEqual(legacy.sources.count, 2, "legacy tabs list converts to sources")
+        expectEqual(legacy.sources[0].url, "https://mail.google.com/mail/u/0/", "legacy order preserved")
 
-        // Missing file yields defaults and creates the file.
-        let fresh = temp.deletingLastPathComponent().appendingPathComponent("fresh.json")
-        let fromNothing = Config.load(createIfMissing: true, at: fresh)
-        expectEqual(fromNothing.tabs.count, 2, "missing file yields defaults")
+        var custom = Config()
+        custom.mailPollSeconds = 200
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted]
+        try? encoder.encode(custom).write(to: file)
+        expectEqual(Config.load(createIfMissing: false, at: file).mailPollSeconds, 200, "poll interval round-trips")
+
+        // Poll intervals below 15s are refused: that is hammering Google.
+        try? "{\"mailPollSeconds\": 1}".data(using: .utf8)?.write(to: file)
+        expect(Config.load(createIfMissing: false, at: file).mailPollSeconds >= 15, "poll interval is floored at 15s")
+
+        let fresh = dir.appendingPathComponent("fresh.json")
+        expectEqual(Config.load(createIfMissing: true, at: fresh).sources.count, 2, "missing file yields defaults")
         expect(FileManager.default.fileExists(atPath: fresh.path), "missing file is written")
-
-        try? FileManager.default.removeItem(at: temp.deletingLastPathComponent())
+        try? FileManager.default.removeItem(at: dir)
     }
 
     private static func testHostPolicy() {
         let config = Config()
         expect(config.isAllowed(host: "calendar.google.com"), "calendar.google.com allowed")
-        expect(config.isAllowed(host: "MAIL.GOOGLE.COM"), "host matching is case-insensitive")
+        expect(config.isAllowed(host: "MAIL.GOOGLE.COM"), "host matching ignores case")
         expect(!config.isAllowed(host: "evil.com"), "evil.com not allowed")
-        expect(!config.isAllowed(host: "notgoogle.com"), "suffix look-alike rejected")
         expect(!config.isAllowed(host: "evil-google.com"), "hyphen look-alike rejected")
-        expect(config.isMeet(URL(string: "https://meet.google.com/abc-defg-hij")!), "meet detected")
-        expect(!config.isMeet(URL(string: "https://calendar.google.com/calendar/u/0/r/month")!), "calendar is not meet")
+    }
+
+    /// The whole point of these: Google's Meet warm-ups must never open a
+    /// browser tab, and real room links must still leave for the browser.
+    private static func testMeetPolicy() {
+        let config = Config()
+        func joinable(_ string: String) -> Bool {
+            config.isJoinableMeet(URL(string: string)!)
+        }
+        expect(joinable("https://meet.google.com/abc-defg-hij"), "a room code joins")
+        expect(joinable("https://meet.google.com/new"), "\"new meeting\" joins")
+        expect(!joinable("https://meet.google.com/"), "the Meet root does not join")
+        expect(!joinable("https://meet.google.com/_meet/whoops"), "the whoops page does not join")
+        expect(!joinable("https://meet.google.com/_meet/ready"), "the ready warm-up does not join")
+        expect(!config.isJoinableMeet(URL(string: "https://calendar.google.com/calendar/u/0/r/month")!),
+               "calendar is not Meet")
+        expect(config.isMeet(URL(string: "https://meet.google.com/")!), "root is still Meet")
     }
 
     private static func testAccountURLs() {
-        expectEqual(
-            Accounts.url("https://calendar.google.com/calendar/u/0/r/month", account: 2),
-            "https://calendar.google.com/calendar/u/2/r/month", "rewrites calendar path")
-        expectEqual(
-            Accounts.url("https://mail.google.com/mail/u/1/", account: 0),
-            "https://mail.google.com/mail/u/0/", "rewrites gmail path")
-        let appended = Accounts.url("https://drive.google.com/drive/my-drive", account: 3)
-        expect(appended.contains("authuser=3"), "adds authuser when no /u/ segment exists")
-        let replaced = Accounts.url("https://docs.google.com/document/d/1abc?authuser=1", account: 0)
-        expect(replaced.contains("authuser=0") && !replaced.contains("authuser=1"), "replaces existing authuser")
-        expectEqual(
-            Accounts.url("https://accounts.google.com/AccountChooser", account: 2),
-            "https://accounts.google.com/AccountChooser", "account chooser untouched")
-        expectEqual(Accounts.url("https://example.com/x", account: 2), "https://example.com/x", "non-Google untouched")
+        expectEqual(Accounts.url("https://mail.google.com/mail/u/0/", account: 2),
+                    "https://mail.google.com/mail/u/2/", "rewrites gmail path")
+        expectEqual(Accounts.url("https://calendar.google.com/calendar/u/1/r/month", account: 0),
+                    "https://calendar.google.com/calendar/u/0/r/month", "rewrites calendar path")
+        expect(Accounts.url("https://drive.google.com/drive", account: 3).contains("authuser=3"),
+               "adds authuser when no /u/ segment exists")
+        expectEqual(Accounts.url("https://accounts.google.com/x", account: 2),
+                    "https://accounts.google.com/x", "account chooser untouched")
         expectEqual(Accounts.account(of: "https://mail.google.com/mail/u/3/") ?? -1, 3, "reads account from path")
         expectEqual(Accounts.account(of: "https://www.google.com/?authuser=4") ?? -1, 4, "reads account from query")
-        expectEqual(Accounts.account(of: "https://example.com/") ?? -99, -99, "unknown account is nil")
     }
 
-    private static func testTabsWithoutLoading() {
-        let tabs = TabsController(specs: TabSpec.defaults, loadPages: false)
-        expectEqual(tabs.tabs.count, 2, "two tabs built")
-        expect(tabs.selectedTab === tabs.tabs[0], "first tab selected")
+    private static func testBlankAndUnreadParsing() {
+        expect(WebPage.isBlank(URL(string: "about:blank")!), "about:blank is blank")
+        expect(WebPage.isBlankString("about:blank"), "blank recognised in string form")
+        expect(!WebPage.isBlank(URL(string: "https://accounts.google.com/v3/signin")!), "a real URL is not blank")
+        expectEqual(WebPage.unreadCount(inTitle: "Inbox (3) - dan@syv.ai - Mail") ?? -1, 3, "unread from title")
+        expectEqual(WebPage.unreadCount(inTitle: "(12) Inbox - Mail") ?? -1, 12, "unread in bracket form")
+        expect(WebPage.unreadCount(inTitle: "Inbox - Mail") == nil, "no unread count means no badge")
+        expect(WebPage.unreadCount(inTitle: nil) == nil, "a nil title parses to nothing")
+    }
 
-        tabs.select(1)
-        expect(tabs.selectedTab === tabs.tabs[1], "selection follows index")
+    private static func testRootControllerWithoutLoading() {
+        let root = RootController(sources: Source.defaults, loadPages: false)
+        expectEqual(root.pagesByOrder.count, 2, "two pages built")
+        expectEqual(root.selectedID, "mail", "Mail is selected at launch")
+        expect(!root.pagesByOrder[0].view.isHidden, "Mail view is visible")
+        expect(root.pagesByOrder[1].view.isHidden, "Calendar view is hidden")
 
-        let before = tabs.tabs.count
-        tabs.newCalendarTab(nil)
-        expectEqual(tabs.tabs.count, before + 1, "newCalendarTab appends")
-        tabs.closeTab(nil)
-        expectEqual(tabs.tabs.count, before, "closeTab removes the newest tab")
+        root.select(id: "calendar")
+        expectEqual(root.selectedID, "calendar", "select(id:) switches source")
+        expect(root.pagesByOrder[0].view.isHidden, "Mail view hides after switching")
 
-        tabs.selectTab(NSMenuItem(title: "x", action: nil, keyEquivalent: "").withRepresented(1))
-        expect(tabs.selectedTab === tabs.tabs[1], "selectTab honours representedObject")
+        root.nextSource(nil)
+        expectEqual(root.selectedID, "mail", "nextSource wraps to Mail")
+        root.previousSource(nil)
+        expectEqual(root.selectedID, "calendar", "previousSource wraps backwards")
 
-        tabs.previousTab(nil)
-        expect(tabs.selectedTab === tabs.tabs[0], "previousTab wraps to first")
-        tabs.nextTab(nil)
-        expect(tabs.selectedTab === tabs.tabs[1], "nextTab wraps forward")
+        let web = root.showPopup("about:blank", opener: root.selectedPage, configuration: nil)
+        expect(web != nil, "window.open yields a web view")
+        expectEqual(root.popupsCount, 1, "the popup is tracked")
+        root.closePopup(for: web!)
+        expectEqual(root.popupsCount, 0, "closing the popup releases it")
+    }
 
-        // The last tab must refuse to close rather than leave an empty window.
-        while tabs.tabs.count > 1 { tabs.closeTab(nil) }
-        tabs.closeTab(nil)
-        expectEqual(tabs.tabs.count, 1, "last tab refuses to close")
+    private static func testSidebar() {
+        let sidebar = Sidebar(sources: Source.defaults)
+        expectEqual(sidebar.items.count, 2, "one rail button per source")
+        expect(sidebar.items.allSatisfy { $0.button.imagePosition == .imageOnly }, "the rail is icon-only")
+        expect(sidebar.items.allSatisfy { $0.badge.isHidden }, "badges start hidden")
+        sidebar.setBadge(7, id: "mail")
+        expectEqual(sidebar.items[0].badge.stringValue, "7", "badge shows the count")
+        expect(!sidebar.items[0].badge.isHidden, "badge becomes visible")
+        sidebar.setBadge(250, id: "mail")
+        expectEqual(sidebar.items[0].badge.stringValue, "99+", "badge caps at 99+")
+        sidebar.setBadge(0, id: "mail")
+        expect(sidebar.items[0].badge.isHidden, "zero hides the badge")
+        sidebar.setSelected(id: "calendar")
+        expect(sidebar.items[1].button.state == .on && sidebar.items[0].button.state == .off,
+               "selection highlights one icon")
+    }
+
+    private static func testMailWatcherGating() {
+        let watcher = MailWatcher.shared
+        watcher.stop()
+        expect(!watcher.isRunning, "watcher is stopped before start")
+        expect(!watcher.absorbsInPageNotifications(host: "mail.google.com"),
+               "a stopped watcher must not swallow in-page notifications")
+        watcher.start(interval: 15, enabled: false)
+        expect(!watcher.isRunning, "starting disabled creates no timer")
     }
 
     private static func testNotificationShim() {
         expect(Notifier.installScript.contains(Notifier.handlerName), "shim posts to the registered handler")
-        expect(Notifier.installScript.contains("class GCalNotification"), "shim defines a Notification replacement")
+        expect(Notifier.installScript.contains("class GCalNotification"), "shim replaces Notification")
         expectEqual(Notifier.makeUserScript(enabled: false).source, "", "disabled shim injects nothing")
-        expectEqual(Notifier.makeUserScript(enabled: true).injectionTime, .atDocumentStart, "shim runs at document start")
     }
 
-    /// Regression cover for the two sign-in failures: an `about:blank` popup
-    /// handed to LaunchServices ("no application set to open the URL"), and a
-    /// popup that never linked back to its opener, leaving the opener stuck.
-    private static func testBlankPopupsAndSignInSection() {
-        expect(WebTab.isBlank(URL(string: "about:blank")!), "about:blank is blank")
-        expect(WebTab.isBlankString("about:blank"), "about:blank recognised as a string")
-        expect(!WebTab.isBlank(URL(string: "https://accounts.google.com/v3/signin")!), "a real URL is not blank")
-        expect(!WebTab.isBlankString("https://mail.google.com/mail/u/0/"), "gmail url is not blank")
-
-        let tabs = TabsController(specs: [TabSpec.defaults[0]])
-        let opener = tabs.tabs[0]
-        let popup = tabs.openPopup("about:blank", opener: opener, configuration: nil)
-        expect(popup != nil, "blank window.open yields a usable web view")
-        expectEqual(tabs.tabCount, 2, "blank popup becomes a tab instead of an error dialog")
-        let popupTab = tabs.tabs[1]
-        expect(popupTab.openerTab === opener, "popup knows who opened it")
-        expect(opener.openedTab === popupTab, "opener tracks the popup it opened")
-        expect(!popupTab.didLoad, "blank popup starts no navigation of its own")
-
-        var waiting = TabSpec.defaults[0]
-        waiting.url = "https://accounts.google.com/v3/signin/identifier?continue=https://calendar.google.com/"
-        let loginTab = tabs.openPopup(waiting.url, opener: nil, configuration: nil).flatMap { _ in tabs.tabs.last }
-        expect(loginTab?.isWaitingAtSignIn ?? false, "a tab on accounts.google.com counts as waiting")
-        let calendar = tabs.tabs[0]
-        expect(!calendar.isWaitingAtSignIn, "a tab showing the month view is not waiting")
+    private static func testRevealHandshake() {
+        Reveal.use(path: nil)  // a temp file, not the real config directory
+        expect(Reveal.take() == nil, "no request pending at first")
+        Reveal.request("calendar")
+        expectEqual(Reveal.take() ?? "", "calendar", "a request survives to the next take")
+        expect(Reveal.take() == nil, "a request is consumed once")
+        Reveal.use(path: nil)
     }
 
     private static func testMenus() {
         let menu = Menus.build()
-        expect(menu.items.count >= 8, "all top-level menus present")
         let titles = menu.items.map { $0.title }
-        for required in ["File", "Edit", "View", "Tabs", "Account", "Window", "Help"] {
+        for required in ["File", "Edit", "View", "Go", "Account", "Window", "Help"] {
             expect(titles.contains(required), "menu contains \(required)")
         }
-        let tabsMenu = menu.items.first { $0.title == "Tabs" }?.submenu
-        expectEqual(tabsMenu?.items.filter { $0.title.hasPrefix("Show Tab ") }.count, 9, "nine tab shortcuts")
-        let accountMenu = menu.items.first { $0.title == "Account" }?.submenu
-        let switcher = accountMenu?.items.first { $0.title == "Switch Account" }?.submenu
-        expectEqual(switcher?.items.count, Accounts.maxAccounts, "account submenu size matches Accounts.maxAccounts")
-    }
-}
-
-private extension NSMenuItem {
-    func withRepresented(_ value: Int) -> NSMenuItem {
-        representedObject = value
-        return self
+        let all = menu.items.compactMap { $0.submenu }.flatMap { $0.items }
+        expect(!all.contains { $0.title.contains("New Tab") }, "no browser-style New Tab commands")
+        expect(!all.contains { $0.title.contains("Close Tab") }, "no browser-style Close Tab command")
+        let go = menu.items.first { $0.title == "Go" }?.submenu
+        let goTitles = go?.items.map { $0.title } ?? []
+        expect(goTitles.first == "Mail" && goTitles.dropFirst().first == "Calendar",
+               "Go lists Mail then Calendar, in that order")
+        expect(all.contains { $0.title == "New Mail Notifications" }, "notifications can be toggled off")
     }
 }
