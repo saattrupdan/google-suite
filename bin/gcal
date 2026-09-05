@@ -6,8 +6,10 @@
 set -euo pipefail
 APP_NAME="Google Suite"
 
+# Name lookup can resolve to the build tree instead of the installed copy, so
+# prefer the explicit /Applications path.
 if [[ -d "/Applications/$APP_NAME.app" ]]; then
-  exec open -a "$APP_NAME" --args "$@"
+  exec open "/Applications/$APP_NAME.app" --args "$@"
 elif [[ -x "$HOME/gitsky/gcal-app/$APP_NAME.app/Contents/MacOS/$APP_NAME" ]]; then
   exec "$HOME/gitsky/gcal-app/$APP_NAME.app/Contents/MacOS/$APP_NAME" "$@"
 else
