@@ -29,6 +29,10 @@ struct Config: Codable {
     var notificationsShim: Bool = true
     var mailNotifications: Bool = true
     var mailPollSeconds: Double = 60
+    /// How many Google accounts to poll for mail: `u/0` … `u/(n-1)`. Slots that
+    /// are not signed in answer 404 and are skipped, so a higher number costs a
+    /// few extra requests and nothing else.
+    var mailAccountSlots = 3
     var userAgent: String? = nil
 
     static let defaultAllowHosts: [String] = [
@@ -42,7 +46,8 @@ struct Config: Codable {
 
     enum CodingKeys: String, CodingKey {
         case sources, allowHosts, openMeetInApp, notificationsShim, mailNotifications
-        case mailPollSeconds, userAgent
+        case mailPollSeconds
+        case mailAccountSlots, userAgent
         // Read-only aliases, so an older config still loads.
         case tabs
     }
@@ -67,6 +72,7 @@ struct Config: Codable {
         notificationsShim = (try? c.decode(Bool.self, forKey: .notificationsShim)) ?? true
         mailNotifications = (try? c.decode(Bool.self, forKey: .mailNotifications)) ?? true
         mailPollSeconds = max(15, (try? c.decode(Double.self, forKey: .mailPollSeconds)) ?? 60)
+        mailAccountSlots = max(1, (try? c.decode(Int.self, forKey: .mailAccountSlots)) ?? 3)
         userAgent = (try? c.decode(String.self, forKey: .userAgent)) ?? nil
         if sources.isEmpty { sources = Source.defaults }
     }
@@ -80,6 +86,8 @@ struct Config: Codable {
         try c.encode(notificationsShim, forKey: .notificationsShim)
         try c.encode(mailNotifications, forKey: .mailNotifications)
         try c.encode(mailPollSeconds, forKey: .mailPollSeconds)
+        try c.encode(mailAccountSlots, forKey: .mailAccountSlots)
+        try c.encode(mailAccountSlots, forKey: .mailAccountSlots)
         try c.encodeIfPresent(userAgent, forKey: .userAgent)
     }
 

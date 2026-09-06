@@ -20,9 +20,11 @@ enum SelfTest {
         testRootControllerWithoutLoading()
         testSidebar()
         testMailWatcherGating()
+        testMailAccountMerge()
         testNotificationShim()
         testMenus()
         testRevealHandshake()
+        testPopupPanelIsFrameBased()
 
         if failures.isEmpty {
             print("SELFTEST ok (\(checks) checks)")
@@ -54,6 +56,7 @@ enum SelfTest {
         expectEqual(config.sources[1].id, "calendar", "Calendar is second")
         expectEqual(config.mailPollSeconds, 60, "mail polls once a minute")
         expect(config.mailNotifications, "mail notifications default on")
+        expectEqual(config.mailAccountSlots, 3, "three account slots polled by default")
         expect(config.sources[0].symbol == "envelope" && config.sources[1].symbol == "calendar",
                "rail icons are envelope and calendar")
     }
@@ -85,6 +88,9 @@ enum SelfTest {
         // Poll intervals below 15s are refused: that is hammering Google.
         try? "{\"mailPollSeconds\": 1}".data(using: .utf8)?.write(to: file)
         expect(Config.load(createIfMissing: false, at: file).mailPollSeconds >= 15, "poll interval is floored at 15s")
+
+        try? "{\"mailAccountSlots\": 0}".data(using: .utf8)?.write(to: file)
+        expect(Config.load(createIfMissing: false, at: file).mailAccountSlots >= 1, "slot count is floored at 1")
 
         let fresh = dir.appendingPathComponent("fresh.json")
         expectEqual(Config.load(createIfMissing: true, at: fresh).sources.count, 2, "missing file yields defaults")
@@ -178,6 +184,39 @@ enum SelfTest {
         sidebar.setSelected(id: "calendar")
         expect(sidebar.items[1].button.state == .on && sidebar.items[0].button.state == .off,
                "selection highlights one icon")
+        expect(sidebar.items[1].button.contentTintColor?.isEqual(to: Sidebar.tint(forSelected: true)) == true,
+               "the shown source is tinted blue")
+        expect(sidebar.items[0].button.contentTintColor?.isEqual(to: Sidebar.tint(forSelected: false)) == true,
+               "the hidden source is grey, not blue")
+    }
+
+    /// The dedup that keeps the badge honest: Gmail answers every unused account
+    /// slot with the same mailbox, so identity — not the slot number — decides.
+    private static func testMailAccountMerge() {
+        func slot(_ u: Int, _ mailbox: String, _ count: Int, _ ids: [String]) -> [String: Any] {
+            ["u": u, "ok": true, "email": mailbox, "fullcount": count,
+             "entries": ids.map { ["id": $0, "title": "Subject \($0)", "from": "Someone"] }]
+        }
+        let one = MailWatcher.merge(["accounts": [slot(0, "a@x.dk", 3, ["i1", "i2"]),
+                                                  slot(1, "a@x.dk", 3, ["i1", "i2"]),
+                                                  slot(2, "a@x.dk", 3, ["i1", "i2"])]],
+                                   excluding: [])
+        expectEqual(one.total, 3, "one mailbox seen through three slots counts once")
+        expectEqual(one.fresh.count, 2, "duplicate entries collapse to distinct messages")
+        expectEqual(one.mailboxes.count, 1, "one mailbox reported")
+
+        let two = MailWatcher.merge(["accounts": [slot(0, "a@x.dk", 3, ["i1"]),
+                                                  slot(1, "b@y.dk", 4, ["i9"]),
+                                                  slot(2, "a@x.dk", 3, ["i1"])]],
+                                    excluding: ["i1"])
+        expectEqual(two.total, 7, "two real mailboxes add up")
+        expectEqual(two.fresh.map { $0.id }, ["i9"], "already-seen messages are not re-notified")
+        expectEqual(two.fresh.first?.mailbox ?? "", "b@y.dk", "a message keeps its mailbox label")
+
+        let dead = MailWatcher.merge(["accounts": [["u": 0, "ok": false, "error": "http 404"]]],
+                                     excluding: [])
+        expect(!dead.countsAsUnread, "no count means the badge is left alone")
+        expect(dead.status.contains("http 404"), "the failure reason survives")
     }
 
     private static func testMailWatcherGating() {
@@ -188,6 +227,14 @@ enum SelfTest {
                "a stopped watcher must not swallow in-page notifications")
         watcher.start(interval: 15, enabled: false)
         expect(!watcher.isRunning, "starting disabled creates no timer")
+    }
+
+    /// The window collapse came from constraints being inserted after the window
+    /// was on screen, so the panel must stay constraint-free.
+    private static func testPopupPanelIsFrameBased() {
+        let panel = PopupPanel(urlString: "about:blank", opener: nil, adopted: nil, loadsPages: false)
+        expect(panel.view.constraints.isEmpty, "the popup panel adds no constraints")
+        expect(panel.view.subviews.count == 2, "panel is bar + web slot, laid out by frames")
     }
 
     private static func testNotificationShim() {

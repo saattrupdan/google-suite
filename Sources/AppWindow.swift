@@ -9,6 +9,10 @@ final class AppWindow: NSWindowController, NSWindowDelegate, NSToolbarDelegate {
             backing: .buffered,
             defer: false)
         window.tabbingMode = .disallowed
+        // Insurance: AppKit can resize a window to the size its content view's
+        // constraints imply. Nothing here implies a size, so without a floor a
+        // constraint-graph update could shrink the window to a title bar.
+        window.contentMinSize = NSSize(width: 640, height: 420)
         window.setFrameAutosaveName("MainWindow")
         window.title = Menus.appName
         window.toolbarStyle = .unified
@@ -22,8 +26,17 @@ final class AppWindow: NSWindowController, NSWindowDelegate, NSToolbarDelegate {
         window.toolbar = toolbar
         toolbar.isVisible = true
 
+        // A view controller's root view comes out of Auto Layout with
+        // `translatesAutoresizingMaskIntoConstraints == false`, which makes the
+        // window adopt that view's *fitting size* the next time the constraint
+        // graph is touched (`-[NSWindow _changeWindowFrameFromConstraintsIfNecessary]`).
+        // Nothing in this hierarchy defines a size — a web view has no intrinsic
+        // size — so attaching a popup panel collapsed the window to the rail's
+        // 56 pt width: a title bar and a close button, nothing else. The content
+        // view must resize with the window, not define it.
         window.contentViewController = content
         window.setContentSize(contentSize)
+        content.followWindowSize(of: window)
         window.makeFirstResponder(content.selectedPage?.webView)
     }
 

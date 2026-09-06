@@ -23,6 +23,20 @@ fi
 
 mkdir -p "$BUILD" "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
+# The app icon is generated from the Google mark, not stored as source in the
+# bundle. Rebuild it if it is missing (tools/make-icon.swift documents where the
+# mark came from).
+if [[ ! -f "$ROOT/Resources/AppIcon.icns" ]]; then
+  if [[ -f "$ROOT/tools/google-g.png" ]]; then
+    echo "icon: generating AppIcon.icns"
+    swift "$ROOT/tools/make-icon.swift"
+    mkdir -p "$ROOT/tools/AppIcon.iconset"
+    iconutil -c icns -o "$ROOT/Resources/AppIcon.icns" "$ROOT/tools/AppIcon.iconset"
+  else
+    echo "icon: Resources/AppIcon.icns missing — the app will show a generic icon" >&2
+  fi
+fi
+
 # shellcheck disable=SC2046  # word-splitting the source list is intentional
 swiftc \
   -swift-version 5 \
@@ -45,6 +59,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
         <key>CFBundleShortVersionString</key><string>$VERSION</string>
         <key>CFBundleVersion</key><string>$VERSION</string>
         <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+        <key>CFBundleIconFile</key><string>AppIcon</string>
         <key>LSMinimumSystemVersion</key><string>$MIN_MACOS</string>
         <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
         <key>NSHighResolutionCapable</key><true/>
@@ -60,6 +75,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 
 printf 'APPL????' > "$APP/Contents/PkgInfo"
+[[ -f "$ROOT/Resources/AppIcon.icns" ]] && cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 [[ -f "$ROOT/README.md" ]] && cp "$ROOT/README.md" "$APP/Contents/Resources/README.md"
 
 # Ad-hoc signature: an unsigned WebKit Networking process gets refused by the

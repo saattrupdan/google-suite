@@ -157,7 +157,20 @@ final class WebPage: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDow
             completion(value, error)
         }
         webView.evaluateJavaScript(js) { result, error in
-            if let error { finish(nil, (error as NSError).localizedDescription); return }
+            if let error {
+                let ns = error as NSError
+                // A bare "A JavaScript exception occurred" tells us nothing; the
+                // message and line live in the userInfo.
+                var detail = ns.localizedDescription
+                if let message = ns.userInfo["WKJavaScriptExceptionMessage"] as? String {
+                    detail += " — \(message)"
+                }
+                if let line = ns.userInfo["WKJavaScriptExceptionLineNumber"] as? Int {
+                    detail += " (line \(line))"
+                }
+                finish(nil, detail)
+                return
+            }
             if let text = result as? String, let data = text.data(using: .utf8) {
                 finish((try? JSONSerialization.jsonObject(with: data)) as Any?, nil)
             } else {

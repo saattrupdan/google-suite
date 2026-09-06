@@ -28,6 +28,12 @@ final class RootController: NSViewController, NSMenuItemValidation {
 
     var popupsCount: Int { popups.count }
 
+    // Layout read-outs for --popupprobe.
+    var sidebarFrame: NSRect { sidebar.frame }
+    var contentFrame: NSRect { content.frame }
+    var popupPanelFrame: NSRect? { popups.values.first?.view.frame }
+    var popupWebFrame: NSRect? { popups.values.first.map { $0.webView.frame } }
+
     init(sources: [Source], loadPages: Bool = true) {
         self.sources = sources
         self.loadsPages = loadPages
@@ -56,16 +62,54 @@ final class RootController: NSViewController, NSMenuItemValidation {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    // MARK: - Window-sized layout
+
+    /// Low-priority size constraints that mirror the window's content size.
+    ///
+    /// Without them the constraint graph defines no size at all — a web view has
+    /// no intrinsic size — and AppKit then satisfies the window from the *fitting
+    /// size* it can derive, which is just the rail's 56 pt and a zero-height body.
+    /// It does this the moment the graph is dirtied, i.e. the first time a popup
+    /// panel is attached, collapsing the window to a title bar and a close button.
+    /// Mirroring the window's size makes that derived size equal the real one, so
+    /// the pass becomes a no-op while the window and the user stay in charge.
+    private var sizeFollowers: (width: NSLayoutConstraint, height: NSLayoutConstraint)?
+    private var resizeObserver: NSObjectProtocol?
+
+    func followWindowSize(of window: NSWindow) {
+        resizeObserver.map(NotificationCenter.default.removeObserver)
+        resizeObserver = nil
+        view.layoutSubtreeIfNeeded()
+
+        let body = window.contentView?.bounds ?? view.bounds
+        let width = view.widthAnchor.constraint(equalToConstant: body.width)
+        let height = view.heightAnchor.constraint(equalToConstant: body.height)
+        width.priority = .defaultLow
+        height.priority = .defaultLow
+        NSLayoutConstraint.activate([width, height])
+        sizeFollowers = (width, height)
+
+        resizeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification, object: window, queue: .main) { [weak self] _ in
+                guard let self, let body = window.contentView?.bounds else { return }
+                self.sizeFollowers?.width.constant = body.width
+                self.sizeFollowers?.height.constant = body.height
+            }
+    }
+
     override func loadView() {
         let root = NSView(frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
-        content.frame = NSRect(x: 56, y: 0, width: 1224, height: 800)
-        content.autoresizingMask = [.width, .height]
+        content.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(content)
         root.addSubview(sidebar)
         NSLayoutConstraint.activate([
             sidebar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             sidebar.topAnchor.constraint(equalTo: root.topAnchor),
             sidebar.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            content.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            content.topAnchor.constraint(equalTo: root.topAnchor),
+            content.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            content.bottomAnchor.constraint(equalTo: root.bottomAnchor),
         ])
         view = root
     }
@@ -196,8 +240,15 @@ final class RootController: NSViewController, NSMenuItemValidation {
 /// A modal-ish panel over the content area for a `window.open` result. Sign-in
 /// is the case that matters, and it needs to feel like part of the app rather
 /// than a stray window.
+/// A `window.open` result: shown as a panel over the content, never as a tab.
+///
+/// Laid out with frames, not constraints, on purpose. Inserting constraints into
+/// the graph after the window is on screen makes AppKit re-derive the window's
+/// frame from the content view's fitting size, and nothing in this hierarchy
+/// implies a size (a web view has none) — the window collapsed to 56x66, a title
+/// bar and a close button, which is what "add another account" used to do.
 final class PopupPanel {
-    let view = NSVisualEffectView()
+    let view = PanelView()
     let webView: WKWebView
     weak var opener: WebPage?
     var onDismiss: ((ObjectIdentifier) -> Void)?
@@ -205,53 +256,63 @@ final class PopupPanel {
     private let urlString: String
     private let loadsPages: Bool
 
+    /// The panel body: a title bar on top, the web view below it.
+    final class PanelView: NSVisualEffectView {
+        let bar = NSView()
+        let slot = NSView()
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            material = .contentBackground
+            blendingMode = .withinWindow
+            state = .active
+            wantsLayer = true
+            layer?.cornerRadius = 10
+            layer?.borderWidth = 1
+            layer?.borderColor = NSColor.separatorColor.cgColor
+            bar.wantsLayer = true
+            bar.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+            addSubview(bar)
+            addSubview(slot)
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+        override func layout() {
+            super.layout()
+            let barHeight: CGFloat = 30
+            bar.frame = NSRect(x: 0, y: bounds.height - barHeight, width: bounds.width, height: barHeight)
+            slot.frame = NSRect(x: 0, y: 0, width: bounds.width, height: max(0, bounds.height - barHeight))
+        }
+    }
+
     init(urlString: String, opener: WebPage?, adopted: WKWebView?, loadsPages: Bool) {
         self.urlString = urlString
         self.opener = opener
         self.loadsPages = loadsPages
         self.webView = adopted
             ?? WKWebView(frame: .zero, configuration: WebPage.defaultConfiguration())
-        view.material = .contentBackground
-        view.blendingMode = .withinWindow
-        view.state = .active
-        view.wantsLayer = true
-        view.layer?.cornerRadius = 10
-        view.layer?.borderWidth = 1
-        view.layer?.borderColor = NSColor.separatorColor.cgColor
 
-        let barView = NSView()
-        barView.wantsLayer = true
-        barView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
         let label = NSTextField(labelWithString: "Google sign-in")
         label.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        label.sizeToFit()
+        label.frame = NSRect(x: 10, y: (30 - label.frame.height) / 2,
+                             width: label.frame.width, height: label.frame.height)
+        label.autoresizingMask = [.maxXMargin, .minYMargin]
         let close = NSButton(title: "Close", target: self, action: #selector(closeTapped))
         close.bezelStyle = .rounded
         close.controlSize = .small
         close.keyEquivalent = "\u{1b}"
-        barView.addSubview(label)
-        barView.addSubview(close)
-        label.translatesAutoresizingMaskIntoConstraints = false
-        close.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: barView.leadingAnchor, constant: 10),
-            label.centerYAnchor.constraint(equalTo: barView.centerYAnchor),
-            close.trailingAnchor.constraint(equalTo: barView.trailingAnchor, constant: -8),
-            close.centerYAnchor.constraint(equalTo: barView.centerYAnchor),
-            barView.heightAnchor.constraint(equalToConstant: 30),
-        ])
+        close.sizeToFit()
+        close.frame = NSRect(x: 0, y: (30 - close.frame.height) / 2,
+                             width: max(52, close.frame.width), height: close.frame.height)
+        close.autoresizingMask = [.minXMargin, .minYMargin]
+        view.bar.addSubview(label)
+        view.bar.addSubview(close)
 
-        webView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(barView)
-        view.addSubview(webView)
-        NSLayoutConstraint.activate([
-            barView.topAnchor.constraint(equalTo: view.topAnchor),
-            barView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            barView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            webView.topAnchor.constraint(equalTo: barView.bottomAnchor),
-            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-        ])
+        webView.frame = view.slot.bounds
+        webView.autoresizingMask = [.width, .height]
+        view.slot.addSubview(webView)
     }
 
     func attach(to container: NSView) {
@@ -261,7 +322,6 @@ final class PopupPanel {
         if loadsPages, !WebPage.isBlankString(urlString), let url = URL(string: urlString) {
             webView.load(URLRequest(url: url))
         }
-        container.needsLayout = true
     }
 
     func contains(_ webView: WKWebView) -> Bool { self.webView === webView }

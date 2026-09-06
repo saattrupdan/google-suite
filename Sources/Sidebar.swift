@@ -9,6 +9,9 @@ final class Sidebar: NSVisualEffectView {
         let source: Source
         let button: NSButton
         let badge: BadgeView
+        /// The icon's background pill; nil-free by construction but optional so
+        /// `setSelected` can style it without the button owning it.
+        weak var container: NSView?
     }
 
     private(set) var items: [Item] = []
@@ -44,9 +47,10 @@ final class Sidebar: NSVisualEffectView {
     private func addItem(_ source: Source) {
         let button = NSButton(frame: .zero)
         button.translatesAutoresizingMaskIntoConstraints = false
-        button.bezelStyle = .texturedRounded
-        button.setButtonType(.pushOnPushOff)
+        button.isBordered = false
+        button.bezelStyle = .regularSquare
         button.imagePosition = .imageOnly
+        button.contentTintColor = Self.tint(forSelected: false)
         button.image = NSImage(systemSymbolName: source.symbol, accessibilityDescription: source.label)
         button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 17, weight: .regular)
         button.target = self
@@ -60,6 +64,8 @@ final class Sidebar: NSVisualEffectView {
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
         let badge = BadgeView()
+        container.wantsLayer = true
+        container.layer?.cornerRadius = 8
         container.addSubview(button)
         container.addSubview(badge)
         NSLayoutConstraint.activate([
@@ -73,7 +79,7 @@ final class Sidebar: NSVisualEffectView {
             badge.topAnchor.constraint(equalTo: container.topAnchor, constant: -2),
         ])
         stack.addArrangedSubview(container)
-        items.append(Item(source: source, button: button, badge: badge))
+        items.append(Item(source: source, button: button, badge: badge, container: container))
     }
 
     @objc private func clicked(_ sender: NSButton) {
@@ -81,8 +87,22 @@ final class Sidebar: NSVisualEffectView {
         onSelect?(id)
     }
 
+    /// Blue means "this is what you are looking at": the selected icon takes the
+    /// accent colour and sits on a faint accent pill; everything else recedes.
+    static func tint(forSelected: Bool) -> NSColor {
+        forSelected ? .controlAccentColor : .secondaryLabelColor
+    }
+
     func setSelected(id: String) {
-        for item in items { item.button.state = item.source.id == id ? .on : .off }
+        for item in items {
+            let selected = item.source.id == id
+            item.button.state = selected ? .on : .off
+            item.button.contentTintColor = Self.tint(forSelected: selected)
+            item.container?.layer?.backgroundColor = selected
+                ? NSColor.controlAccentColor.withAlphaComponent(0.14).cgColor
+                : NSColor.clear.cgColor
+            item.button.toolTip = selected ? "\(item.source.label) (shown)" : item.source.label
+        }
     }
 
     /// A count of 0 hides the badge entirely.

@@ -4,7 +4,9 @@ import UserNotifications
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
                          UNUserNotificationCenterDelegate {
     var window: AppWindow!
-    private weak var root: RootController?
+    /// Retained: the window holds the view, not the controller.
+    private var root: RootController?
+    private var probe: PopupProbe?
     /// Held strongly: the smoke runner re-arms itself across run-loop turns.
     private var smoke: SmokeRunner?
 
@@ -29,12 +31,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         window = AppWindow(content: root)
         MailWatcher.shared.page = root.pagesByOrder.first { $0.source.id == "mail" }
         MailWatcher.shared.start(interval: runtime.config.mailPollSeconds,
-                                 enabled: runtime.config.mailNotifications)
+                                 enabled: runtime.config.mailNotifications,
+                                 accounts: runtime.config.mailAccountSlots)
 
         applyRevealRequest()
 
         // Smoke drives the same path as normal use, window on screen included.
         window.show()
+        if arguments.contains("--popupprobe") {
+            // Retained: an unretained probe would vanish before its own timers.
+            let probe = PopupProbe(root: root, window: window.window)
+            self.probe = probe
+            probe.start()
+        }
         if runtime.smokeMode {
             smoke = SmokeRunner(root: root, window: window.window)
             smoke?.start()
@@ -203,5 +212,54 @@ final class RunLoopGate {
         while !signalled, Date() < deadline {
             RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
         }
+    }
+}
+
+/// Regression test for the window collapse: attaches a popup panel the way
+/// `window.open` does and fails if the window or the web view ends up tiny. The
+/// bug was invisible in the selftest because it only happens once the window is
+/// on screen and a constraint graph update makes AppKit re-derive the window's
+/// frame from the content view's fitting size.
+final class PopupProbe {
+    private let root: RootController
+    private let window: NSWindow?
+    private var deadline = Date().addingTimeInterval(15)
+
+    init(root: RootController, window: NSWindow?) {
+        self.root = root
+        self.window = window
+    }
+
+    func start() {
+        window?.makeKeyAndOrderFront(nil)
+        guard let opener = root.pagesByOrder.first else { print("PROBE fail: no page"); exit(1) }
+        baseline = window?.frame ?? .zero
+        _ = root.showPopup("about:blank", opener: opener, configuration: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [self] in
+            self.dump("after layout")
+            self.finish()
+        }
+    }
+
+    private var baseline: NSRect = .zero
+
+    private func dump(_ when: String) {
+        print("PROBE \(when): window=\(desc(window?.frame)) content=\(desc(root.contentFrame)) "
+              + "sidebar=\(desc(root.sidebarFrame)) popups=\(root.popupsCount) "
+              + "panel=\(desc(root.popupPanelFrame)) panelWeb=\(desc(root.popupWebFrame))")
+    }
+
+    private func desc(_ frame: NSRect?) -> String {
+        guard let frame else { return "nil" }
+        return "\(Int(frame.width))x\(Int(frame.height))"
+    }
+
+    private func finish() {
+        let panel = root.popupWebFrame ?? .zero
+        let window = window?.frame ?? .zero
+        let ok = panel.width > 200 && panel.height > 200
+            && abs(window.width - baseline.width) < 2 && abs(window.height - baseline.height) < 2
+        print("PROBE \(ok ? "ok" : "FAIL: the popup collapsed the window")")
+        exit(ok ? 0 : 1)
     }
 }
