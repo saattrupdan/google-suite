@@ -8,6 +8,17 @@ struct Source: Codable, Equatable {
     var label: String
     var url: String
     var symbol: String
+    /// Hosts that belong to this surface. Anything else is a link, and links
+    /// open in the browser — this app shows mail and calendars, it does not
+    /// browse. Set it only to override what the URL implies.
+    var hosts: [String]? = nil
+
+    var inAppHosts: [String] {
+        if let hosts, !hosts.isEmpty { return hosts }
+        guard let host = URL(string: url)?.host?.lowercased() else { return [] }
+        // Calendar is reachable through www.google.com, which redirects.
+        return host.contains("calendar.google.com") ? [host, "www.google.com"] : [host]
+    }
 
     static let defaults: [Source] = [
         // Mail first: it is the noisier of the two and the one that badges.
@@ -24,7 +35,10 @@ struct Source: Codable, Equatable {
 /// comma.
 struct Config: Codable {
     var sources: [Source] = Source.defaults
-    var allowHosts: [String] = Config.defaultAllowHosts
+    /// Hosts *beyond* the two surfaces' own that may stay in the window. Empty
+    /// by default: the old default listed Drive, Docs, Keep and `google.com`,
+    /// which turned every link in an email into a page inside this app.
+    var allowHosts: [String] = []
     var openMeetInApp: Bool = false
     var notificationsShim: Bool = true
     var mailNotifications: Bool = true
@@ -34,18 +48,19 @@ struct Config: Codable {
     /// few extra requests and nothing else.
     var mailAccountSlots = 3
     var userAgent: String? = nil
+    /// Show both surfaces at once instead of one at a time. Worth it on a large
+    /// monitor, pointless on a laptop.
+    var splitLayout = false
+    /// Where a link goes: `true` (the default) sends anything that is not Mail
+    /// or Calendar to your browser.
+    var openLinksInBrowser = true
 
-    static let defaultAllowHosts: [String] = [
-        "calendar.google.com", "mail.google.com", "accounts.google.com", "www.google.com",
-        "google.com", "docs.google.com", "drive.google.com", "keep.google.com",
-        "contacts.google.com", "meet.google.com", "googleusercontent.com", "gstatic.com",
-        "googleapis.com", "gmail.com",
-    ]
 
     static let defaults = Config()
 
     enum CodingKeys: String, CodingKey {
         case sources, allowHosts, openMeetInApp, notificationsShim, mailNotifications
+        case splitLayout, openLinksInBrowser
         case mailPollSeconds
         case mailAccountSlots, userAgent
         // Read-only aliases, so an older config still loads.
@@ -67,12 +82,14 @@ struct Config: Codable {
         } else {
             sources = (try? c.decode([Source].self, forKey: .sources)) ?? Source.defaults
         }
-        allowHosts = (try? c.decode([String].self, forKey: .allowHosts)) ?? Self.defaultAllowHosts
+        allowHosts = (try? c.decode([String].self, forKey: .allowHosts)) ?? []
         openMeetInApp = (try? c.decode(Bool.self, forKey: .openMeetInApp)) ?? false
         notificationsShim = (try? c.decode(Bool.self, forKey: .notificationsShim)) ?? true
         mailNotifications = (try? c.decode(Bool.self, forKey: .mailNotifications)) ?? true
         mailPollSeconds = max(15, (try? c.decode(Double.self, forKey: .mailPollSeconds)) ?? 60)
         mailAccountSlots = max(1, (try? c.decode(Int.self, forKey: .mailAccountSlots)) ?? 3)
+        splitLayout = (try? c.decode(Bool.self, forKey: .splitLayout)) ?? false
+        openLinksInBrowser = (try? c.decode(Bool.self, forKey: .openLinksInBrowser)) ?? true
         userAgent = (try? c.decode(String.self, forKey: .userAgent)) ?? nil
         if sources.isEmpty { sources = Source.defaults }
     }
@@ -87,7 +104,11 @@ struct Config: Codable {
         try c.encode(mailNotifications, forKey: .mailNotifications)
         try c.encode(mailPollSeconds, forKey: .mailPollSeconds)
         try c.encode(mailAccountSlots, forKey: .mailAccountSlots)
+        try c.encode(splitLayout, forKey: .splitLayout)
+        try c.encode(openLinksInBrowser, forKey: .openLinksInBrowser)
         try c.encode(mailAccountSlots, forKey: .mailAccountSlots)
+        try c.encode(splitLayout, forKey: .splitLayout)
+        try c.encode(openLinksInBrowser, forKey: .openLinksInBrowser)
         try c.encodeIfPresent(userAgent, forKey: .userAgent)
     }
 
@@ -113,6 +134,19 @@ struct Config: Codable {
                 "gcal: ignoring unreadable config at \(location.path): \(error)\n".data(using: .utf8)!)
             return Config()
         }
+    }
+
+    /// Writes the running configuration back, so a change made from the menu
+    /// (split view, for instance) survives the next launch.
+    @discardableResult
+    static func save(_ config: Config, to url: URL? = nil) -> Bool {
+        let location = url ?? fileURL
+        try? FileManager.default.createDirectory(at: location.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(config) else { return false }
+        return (try? data.write(to: location, options: .atomic)) != nil
     }
 
     static func writeDefaults(to url: URL) {
@@ -142,6 +176,17 @@ struct Config: Codable {
     // MARK: - Policy helpers
 
     /// True when `host` is an allow-listed domain or a subdomain of one.
+    /// Does this host belong in the window, or is it a link for the browser?
+    /// Sign-in must happen here or the flow can never complete.
+    func staysInApp(host: String, for source: Source) -> Bool {
+        let h = host.lowercased()
+        if Self.signInHosts.contains(where: { h == $0 || h.hasSuffix("." + $0) }) { return true }
+        if source.inAppHosts.contains(where: { h == $0 || h.hasSuffix("." + $0) }) { return true }
+        return isAllowed(host: h)
+    }
+
+    static let signInHosts = ["accounts.google.com", "myaccount.google.com"]
+
     func isAllowed(host: String) -> Bool {
         let h = host.lowercased()
         return allowHosts.contains { entry in

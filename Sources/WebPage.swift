@@ -38,7 +38,8 @@ final class WebPage: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDow
         super.init(nibName: nil, bundle: nil)
         webView.navigationDelegate = self
         webView.uiDelegate = self
-        webView.allowsBackForwardNavigationGestures = true
+        // No back/forward: swipe should not turn this into a browser.
+        webView.allowsBackForwardNavigationGestures = false
         titleObservation = webView.observe(\.title, options: [.initial, .new]) { [weak self] _, _ in
             guard let self else { return }
             self.onTitleChanged?(self)
@@ -128,6 +129,12 @@ final class WebPage: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDow
         if url.host != nil { return false }
         if url.scheme?.lowercased() == "about" { return true }
         return url.absoluteString.isEmpty
+    }
+
+    /// Sign-in has to happen inside the window; everything Google calls a link
+    /// does not.
+    static func isSignIn(_ host: String) -> Bool {
+        Config.signInHosts.contains { host == $0 || host.hasSuffix("." + $0) }
     }
 
     static func isBlankString(_ string: String) -> Bool {
@@ -277,15 +284,34 @@ final class WebPage: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDow
             decisionHandler(.allow); return
         }
 
-        if AppRuntime.shared.config.isAllowed(host: url.host ?? "") {
-            if navigationAction.targetFrame == nil {
-                RootController.current?.showPopup(url.absoluteString, opener: self, configuration: nil)
+        // This is not a browser. Only the surface's own pages stay in the
+        // window; a link to Drive, Docs or some article in an email belongs in
+        // the user's browser, which is also where a popup would go.
+        let host = url.host ?? ""
+        let inApp = AppRuntime.shared.config.openLinksInBrowser
+            ? AppRuntime.shared.config.staysInApp(host: host, for: source)
+            : AppRuntime.shared.config.isAllowed(host: host)
+
+        if inApp {
+            if navigationAction.targetFrame == nil,
+               AppRuntime.shared.config.staysInApp(host: host, for: source) {
+                // Only a sign-in popup belongs here; a target=_blank link to the
+                // same surface is still a link.
+                if Self.isSignIn(host) {
+                    RootController.current?.showPopup(url.absoluteString, opener: self, configuration: nil)
+                    decisionHandler(.cancel); return
+                }
+                NSWorkspace.shared.open(url)
                 decisionHandler(.cancel); return
             }
             decisionHandler(.allow); return
         }
 
-        if !isMainFrame { decisionHandler(.allow); return }
+        guard isMainFrame else {
+            // An iframe pointing elsewhere is not a click; refuse it quietly
+            // rather than spawning a browser tab.
+            decisionHandler(.cancel); return
+        }
         NSWorkspace.shared.open(url)
         decisionHandler(.cancel)
     }
@@ -365,7 +391,14 @@ final class WebPage: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDow
             }
             return nil
         }
-        if !AppRuntime.shared.config.isAllowed(host: url.host ?? "") {
+        // A popup is either Google's sign-in flow, which must stay here or the
+        // login can never finish, or a link, which belongs in the browser.
+        let host = url.host ?? ""
+        if Self.isSignIn(host) {
+            return RootController.current?.showPopup(url.absoluteString, opener: self, configuration: configuration)
+        }
+        if AppRuntime.shared.config.openLinksInBrowser
+            || !AppRuntime.shared.config.isAllowed(host: host) {
             NSWorkspace.shared.open(url)
             return nil
         }

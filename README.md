@@ -32,15 +32,31 @@ so Google does not reject it as an embedded web view.
 
 ## Interface
 
+* **No title bar.** The content runs to the top of the window and the traffic lights float
+  over the rail; drag the window by the rail or the divider. There is no toolbar either —
+  everything it could have held is in the menu bar, or gone.
 * **Left rail** — Mail, then Calendar. Icon only; the source you are looking at is
   **blue**, the other one grey, and unread mail shows as a red badge on the envelope.
   `⌘1` / `⌘2`, or `⌃⇥` to cycle.
-* **Toolbar** — Reload, and *Open in Browser* for when you need the real thing.
-* No tabs, no address bar, no history menu. Two surfaces, not a browser.
+* **Side by side** (`⌘\`) — Mail and Calendar split the window evenly, both live at once.
+  Worth it on a large monitor; off by default. In split view both rail icons are blue,
+  because both are shown.
+* No tabs, no address bar, no back/forward. Two surfaces, not a browser.
 
 Sign-in popups (`window.open`) appear as a panel over the content and close themselves
 when the flow finishes; the page that opened them keeps its `window.opener` link, so
 Google's popup can report back.
+
+## Links
+
+Links go to your browser, not into this window. What stays inside is deliberately small:
+the surface you are in (`mail.google.com` or `calendar.google.com`), Google's sign-in
+pages, and anything you list in `allowHosts`. A Drive file, a Docs link, an article in an
+email, a target=`_blank` link — all of that opens in your default browser, which is the
+only place it can look right anyway.
+
+Sign-in popups are the exception that must stay: they need to keep the `window.opener`
+link, so they open as a panel inside the window and close themselves.
 
 ## Several Google accounts
 
@@ -96,8 +112,10 @@ an account in Apple's Mail app.
     { "id": "calendar", "label": "Calendar",
       "url": "https://calendar.google.com/calendar/u/0/r/month", "symbol": "calendar" }
   ],
-  "allowHosts": ["calendar.google.com", "mail.google.com", "google.com", "gstatic.com"],
+  "allowHosts": [],
   "openMeetInApp": false,
+  "openLinksInBrowser": true,
+  "splitLayout": false,
   "notificationsShim": true,
   "mailNotifications": true,
   "mailPollSeconds": 60,
@@ -106,8 +124,14 @@ an account in Apple's Mail app.
 }
 ```
 
-* **sources** — what the rail shows. An unknown host goes to your browser unless you list
-  it in `allowHosts`.
+* **sources** — what the rail shows. Each source carries the hosts that belong to it,
+  derived from its URL; `hosts` overrides that.
+* **openLinksInBrowser** — `true` (default): everything that is not the current surface or
+  sign-in opens in your browser. `false` restores the older behaviour of keeping any host
+  listed in `allowHosts` inside the window.
+* **splitLayout** — start in split view rather than one surface at a time.
+* **allowHosts** — *extra* hosts that may stay in the window. Empty by default; it used to
+  list Drive, Docs, Keep and `google.com`, which turned every link into a page in here.
 * **openMeetInApp** — `false` (default) sends genuine Meet links to your browser. Google's
   silent warm-up requests to `meet.google.com/` and `/_meet/*` are never opened anywhere;
   they stay in-page. `true` joins calls inside the window and asks for camera/mic.
@@ -122,6 +146,7 @@ an account in Apple's Mail app.
 | Keys | Action |
 | --- | --- |
 | `⌘1` / `⌘2` | Mail / Calendar |
+| `⌘\` | side-by-side view on or off |
 | `⌃⇥` / `⌃⇧⇥` | next / previous source |
 | `⌘R` / `⌥⌘⇧R` | reload this source / reload both |
 | `⌥⌘K` | check mail now |
@@ -135,14 +160,15 @@ an account in Apple's Mail app.
 ./smoke.sh          # SELFTEST, then the popup layout stage, then SMOKE — each with a watchdog
 ```
 
-* `--selftest` — 91 offline checks: source order, config recovery from malformed and
+* `--selftest` — 116 offline checks: source order, config recovery from malformed and
   legacy files, host allow-list against look-alike domains, **Meet join-vs-warm-up
   classification**, account URL rewriting, blank-popup handling, unread-count parsing,
   **account-merge dedup** (three slots, one mailbox, one badge), rail selection, tint and
   badges, watcher gating, menu shape, and that the popup panel stays constraint-free.
 * `--smoke` — builds the real window and prints what it became: layout (rail width, pages
   attached/visible, popups), notification authorization, which mail tier is live, the user
-  agent Google saw, and each source's final URL and title. A run that reaches
+  the window chrome (`titlebar=hidden fullSize=true toolbar=none`) and the icon the
+  switcher will draw, then each source's final URL and title. A run that reaches
   `Inbox (1) - you@corp - Mail` is proof of a working session, not just a loaded page.
 * `--popupprobe` — attaches a popup panel to the live window and fails if the window
   shrinks. It exists because *"add another account"* once collapsed the window to a title
@@ -177,7 +203,10 @@ tools/make-icon.swift       generates Resources/AppIcon.icns from tools/google-g
 A white rounded tile with Google's four-colour **G** — the same shape Google's own app
 icons use — generated by `swift tools/make-icon.swift` from the mark at
 `ssl.gstatic.com/images/branding/product/1x/googleg_512dp.png`. It is Google's trademark:
-fine for a personal build on your own machine, not something to distribute.
+fine for a personal build on your own machine, not something to distribute. The app also
+sets `NSApp.applicationIconImage` at launch: `CFBundleIconFile` on its own was read by
+Spotlight while ⌘-tab kept drawing the cached generic icon, and the running process
+carrying its own icon settles that without waiting for any cache to expire.
 
 ## Limits, honestly
 

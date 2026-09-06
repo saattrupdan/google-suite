@@ -19,6 +19,8 @@ enum SelfTest {
         testBlankAndUnreadParsing()
         testRootControllerWithoutLoading()
         testSidebar()
+        testSplitLayout()
+        testLinkPolicy()
         testMailWatcherGating()
         testMailAccountMerge()
         testNotificationShim()
@@ -85,6 +87,11 @@ enum SelfTest {
         try? encoder.encode(custom).write(to: file)
         expectEqual(Config.load(createIfMissing: false, at: file).mailPollSeconds, 200, "poll interval round-trips")
 
+        try? "{\"splitLayout\": true, \"openLinksInBrowser\": false}".data(using: .utf8)?.write(to: file)
+        let modes = Config.load(createIfMissing: false, at: file)
+        expect(modes.splitLayout, "split view is remembered")
+        expect(!modes.openLinksInBrowser, "link handling can be turned off")
+
         // Poll intervals below 15s are refused: that is hammering Google.
         try? "{\"mailPollSeconds\": 1}".data(using: .utf8)?.write(to: file)
         expect(Config.load(createIfMissing: false, at: file).mailPollSeconds >= 15, "poll interval is floored at 15s")
@@ -99,11 +106,15 @@ enum SelfTest {
     }
 
     private static func testHostPolicy() {
-        let config = Config()
-        expect(config.isAllowed(host: "calendar.google.com"), "calendar.google.com allowed")
-        expect(config.isAllowed(host: "MAIL.GOOGLE.COM"), "host matching ignores case")
+        var config = Config()
+        config.allowHosts = ["calendar.google.com"]
+        expect(config.isAllowed(host: "calendar.google.com"), "an allowed host matches exactly")
+        expect(config.isAllowed(host: "CALENDAR.GOOGLE.COM"), "host matching ignores case")
         expect(!config.isAllowed(host: "evil.com"), "evil.com not allowed")
         expect(!config.isAllowed(host: "evil-google.com"), "hyphen look-alike rejected")
+        expect(config.allowHosts == ["calendar.google.com"], "extras round-trip")
+        expect(Config().allowHosts.isEmpty,
+               "nothing is privileged by default; each surface carries its own hosts")
     }
 
     /// The whole point of these: Google's Meet warm-ups must never open a
@@ -171,16 +182,30 @@ enum SelfTest {
 
     private static func testSidebar() {
         let sidebar = Sidebar(sources: Source.defaults)
+        sidebar.frame = NSRect(x: 0, y: 0, width: Sidebar.width, height: 600)
+        sidebar.layoutSubtreeIfNeeded()
         expectEqual(sidebar.items.count, 2, "one rail button per source")
         expect(sidebar.items.allSatisfy { $0.button.imagePosition == .imageOnly }, "the rail is icon-only")
         expect(sidebar.items.allSatisfy { $0.badge.isHidden }, "badges start hidden")
         sidebar.setBadge(7, id: "mail")
+        sidebar.layoutSubtreeIfNeeded()
         expectEqual(sidebar.items[0].badge.stringValue, "7", "badge shows the count")
         expect(!sidebar.items[0].badge.isHidden, "badge becomes visible")
         sidebar.setBadge(250, id: "mail")
         expectEqual(sidebar.items[0].badge.stringValue, "99+", "badge caps at 99+")
         sidebar.setBadge(0, id: "mail")
         expect(sidebar.items[0].badge.isHidden, "zero hides the badge")
+        // A badge hanging over the container's edge is what got clipped by the
+        // rail, so it must live inside it.
+        sidebar.setBadge(123, id: "mail")
+        sidebar.layoutSubtreeIfNeeded()
+        let badge = sidebar.items[0].badge.frame
+        let holder = sidebar.items[0].container.frame
+        expect(badge.maxX <= holder.maxX + 0.5 && badge.maxY <= holder.maxY + 0.5 && badge.minX >= holder.minX,
+               "the badge stays inside its icon (\(badge) in \(holder))")
+        expect(sidebar.items[0].container.frame.maxY <= sidebar.bounds.height - Sidebar.topInset + 1,
+               "the first icon clears the window buttons (top \(sidebar.items[0].container.frame.maxY) of "
+               + "\(sidebar.bounds.height))")
         sidebar.setSelected(id: "calendar")
         expect(sidebar.items[1].button.state == .on && sidebar.items[0].button.state == .off,
                "selection highlights one icon")
@@ -192,6 +217,52 @@ enum SelfTest {
 
     /// The dedup that keeps the badge honest: Gmail answers every unused account
     /// slot with the same mailbox, so identity — not the slot number — decides.
+    private static func testSplitLayout() {
+        let root = RootController(sources: Source.defaults, loadPages: false)
+        root.view.frame = NSRect(x: 0, y: 0, width: 1280, height: 800)
+        root.view.layoutSubtreeIfNeeded()
+        expect(root.pagesByOrder[1].view.isHidden, "single view hides the other surface")
+
+        root.layout = .split
+        let mail = root.pagesByOrder[0].view.frame
+        let calendar = root.pagesByOrder[1].view.frame
+        expect(!root.pagesByOrder[0].view.isHidden && !root.pagesByOrder[1].view.isHidden,
+               "split view shows both surfaces")
+        expect(abs(mail.width - calendar.width) < 2 && calendar.minX >= mail.maxX,
+               "split view gives each surface half the width (\(mail) / \(calendar))")
+        expect(mail.height > 600 && calendar.height > 600, "split surfaces fill the height")
+
+        root.layout = .single
+        expect(root.pagesByOrder[1].view.isHidden, "going back to one surface hides Calendar")
+
+        // Selecting in split view must not hide the other half.
+        root.layout = .split
+        root.select(id: "mail")
+        expect(!root.pagesByOrder[1].view.isHidden, "selecting one surface keeps both visible")
+    }
+
+    /// Links are for the browser; only the two surfaces and sign-in belong in
+    /// the window.
+    private static func testLinkPolicy() {
+        let config = Config()
+        let mail = config.sources.first { $0.id == "mail" }!
+        let calendar = config.sources.first { $0.id == "calendar" }!
+        expect(config.staysInApp(host: "mail.google.com", for: mail), "Mail stays in Mail")
+        expect(!config.staysInApp(host: "docs.google.com", for: mail), "a Docs link leaves the app")
+        expect(!config.staysInApp(host: "drive.google.com", for: mail), "Drive leaves the app")
+        expect(!config.staysInApp(host: "example.com", for: mail), "an article in an email leaves the app")
+        expect(config.staysInApp(host: "accounts.google.com", for: mail), "sign-in stays inside")
+        expect(config.staysInApp(host: "calendar.google.com", for: calendar), "Calendar stays in Calendar")
+        expect(!config.staysInApp(host: "mail.google.com", for: calendar),
+               "Calendar does not swallow Mail links")
+        expect(mail.inAppHosts == ["mail.google.com"], "hosts derive from the source URL")
+        expect(calendar.inAppHosts.contains("www.google.com"), "Calendar also answers to www.google.com")
+        expect(config.staysInApp(host: "notion.so", for: mail) == false, "nothing else is privileged")
+        var extra = Config()
+        extra.allowHosts = ["notion.so"]
+        expect(extra.staysInApp(host: "notion.so", for: mail), "an explicitly allowed host may stay")
+    }
+
     private static func testMailAccountMerge() {
         func slot(_ u: Int, _ mailbox: String, _ count: Int, _ ids: [String]) -> [String: Any] {
             ["u": u, "ok": true, "email": mailbox, "fullcount": count,
@@ -266,5 +337,10 @@ enum SelfTest {
         expect(goTitles.first == "Mail" && goTitles.dropFirst().first == "Calendar",
                "Go lists Mail then Calendar, in that order")
         expect(all.contains { $0.title == "New Mail Notifications" }, "notifications can be toggled off")
+        let view = menu.items.first { $0.title == "View" }?.submenu
+        let viewTitles = view?.items.map { $0.title } ?? []
+        expect(viewTitles.contains("Side by Side"), "split view is a menu command")
+        expect(!viewTitles.contains("Back") && !viewTitles.contains("Forward"),
+               "no browser navigation commands")
     }
 }

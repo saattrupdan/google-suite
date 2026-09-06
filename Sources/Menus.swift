@@ -98,8 +98,8 @@ enum Menus {
                          modifiers: [.command, .shift, .option]))
         menu.addItem(item("Stop", #selector(WebPage.stopLoading(_:)), "."))
         menu.addItem(.separator())
-        menu.addItem(item("Back", #selector(WebPage.goBack(_:)), "["))
-        menu.addItem(item("Forward", #selector(WebPage.goForward(_:)), "]"))
+        // No Back/Forward: this shows two surfaces, it does not browse.
+        menu.addItem(item("Side by Side", #selector(RootController.toggleSplit(_:)), "\\"))
         menu.addItem(.separator())
         menu.addItem(item("Zoom In", #selector(WebPage.zoomIn(_:)), "+"))
         menu.addItem(item("Zoom Out", #selector(WebPage.zoomOut(_:)), "-"))

@@ -6,18 +6,46 @@ import WebKit
 /// This replaced a tab bar. Two fixed surfaces do not need tabs, and the tab
 /// machinery (segmented control, add/close, `⌘T`) was both the source of a
 /// crash and the wrong mental model — this is not a browser.
+/// A view that tells its owner when it has been sized. Layout is done with
+/// frames throughout, so this is the one hook that keeps the window in charge.
+final class LayoutView: NSView {
+    var onLayout: (() -> Void)?
+
+    override func layout() {
+        super.layout()
+        onLayout?()
+    }
+}
+
 final class RootController: NSViewController, NSMenuItemValidation {
     static weak var current: RootController?
 
     private(set) var sources: [Source] = []
     private var pages: [String: WebPage] = [:]
-    private let content = NSView()
+    private let content = LayoutView()
+    private let divider = NSView()
     private var sidebar: Sidebar!
 
     /// Popup web views we are holding open, keyed by the page that opened them.
     private var popups: [ObjectIdentifier: PopupPanel] = [:]
 
     private(set) var selectedID: String
+
+    /// One surface at a time, or both side by side.
+    enum Layout: String {
+        case single, split
+    }
+
+    var layout: Layout = .single {
+        didSet {
+            guard layout != oldValue else { return }
+            relayout()
+            NSApp.mainMenu?.update()
+        }
+    }
+
+    /// Width taken by the divider between two surfaces in split view.
+    static let dividerWidth: CGFloat = 1
 
     /// False only for `--selftest`, which must not touch the network.
     private let loadsPages: Bool
@@ -98,33 +126,68 @@ final class RootController: NSViewController, NSMenuItemValidation {
     }
 
     override func loadView() {
-        let root = NSView(frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
-        content.translatesAutoresizingMaskIntoConstraints = false
+        let root = LayoutView(frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
+        root.onLayout = { [weak self] in self?.relayout() }
+        divider.wantsLayer = true
+        divider.layer?.backgroundColor = NSColor.separatorColor.cgColor
+        divider.isHidden = true
+        content.wantsLayer = true
         root.addSubview(content)
         root.addSubview(sidebar)
-        NSLayoutConstraint.activate([
-            sidebar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            sidebar.topAnchor.constraint(equalTo: root.topAnchor),
-            sidebar.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            content.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
-            content.topAnchor.constraint(equalTo: root.topAnchor),
-            content.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            content.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-        ])
+        content.addSubview(divider)
         view = root
+        relayout()
     }
+
+    /// Frames all the way down. Constraints added after the window is on screen
+    /// make AppKit resize the window to the content view's fitting size, which
+    /// this hierarchy cannot supply — see PopupPanel.
+    private func relayout() {
+        let bounds = view.bounds
+        sidebar.frame = NSRect(x: 0, y: 0, width: Sidebar.width, height: bounds.height)
+        content.frame = NSRect(x: Sidebar.width, y: 0,
+                               width: max(0, bounds.width - Sidebar.width), height: bounds.height)
+
+        switch layout {
+        case .single:
+            divider.isHidden = true
+            for page in pagesByOrder {
+                page.view.frame = content.bounds
+                page.view.isHidden = page.source.id != selectedID
+            }
+            sidebar.setSelected(id: selectedID)
+        case .split:
+            divider.isHidden = false
+            let half = max(0, (content.bounds.width - Self.dividerWidth) / 2)
+            for (index, page) in pagesByOrder.enumerated() {
+                page.view.frame = NSRect(x: CGFloat(index) * (half + Self.dividerWidth), y: 0,
+                                         width: half, height: content.bounds.height)
+                page.view.isHidden = false
+            }
+            divider.frame = NSRect(x: half, y: 0, width: Self.dividerWidth, height: content.bounds.height)
+            sidebar.setShown(ids: Set(pagesByOrder.map { $0.source.id }))
+        }
+    }
+
+    @objc func toggleSplit(_ sender: Any?) {
+        layout = layout == .split ? .single : .split
+        AppRuntime.shared.config.splitLayout = layout == .split
+        Config.save(AppRuntime.shared.config)
+    }
+
 
     // MARK: - Selection
 
     func select(id: String) {
-        guard pages[id] != nil, id != selectedID else { return }
-        pages[selectedID]?.view.isHidden = true
-        selectedID = id
-        let page = pages[id]
-        page?.view.isHidden = false
-        sidebar.setSelected(id: id)
-        if let page { titleChanged(for: page) }
-        view.window?.makeFirstResponder(page?.firstResponderTarget)
+        guard let page = pages[id] else { return }
+        if id != selectedID {
+            if layout == .single { pages[selectedID]?.view.isHidden = true }
+            selectedID = id
+            page.view.isHidden = false
+            if layout == .single { sidebar.setSelected(id: id) }
+        }
+        titleChanged(for: page)
+        view.window?.makeFirstResponder(page.firstResponderTarget)
         NSApp.mainMenu?.update()
     }
 
@@ -207,6 +270,9 @@ final class RootController: NSViewController, NSMenuItemValidation {
         case #selector(nextSource(_:)), #selector(previousSource(_:)):
             return sources.count > 1
         case #selector(applyAccountToAllSources(_:)):
+            return pages.count > 1
+        case #selector(toggleSplit(_:)):
+            menuItem.state = layout == .split ? .on : .off
             return pages.count > 1
         default:
             return true

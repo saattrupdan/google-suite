@@ -15,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
     func applicationDidFinishLaunching(_ notification: Notification) {
         let runtime = AppRuntime.shared
         NSApp.mainMenu = Menus.build()
+        applyDockIcon()
+
         if Bundle.main.bundleIdentifier != nil {
             let center = UNUserNotificationCenter.current()
             center.delegate = self
@@ -27,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         }
 
         let root = RootController(sources: runtime.config.sources)
+        root.layout = runtime.config.splitLayout ? .split : .single
         self.root = root
         window = AppWindow(content: root)
         MailWatcher.shared.page = root.pagesByOrder.first { $0.source.id == "mail" }
@@ -45,7 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
             probe.start()
         }
         if runtime.smokeMode {
-            smoke = SmokeRunner(root: root, window: window.window)
+            smoke = SmokeRunner(root: root, window: window.window, chrome: window.chromeSummary)
             smoke?.start()
         }
     }
@@ -53,6 +56,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         if !hasVisibleWindows { window?.show() }
         return true
+    }
+
+    /// Sets the icon the Dock and the app switcher show, straight from the
+    /// bundle.
+    ///
+    /// `CFBundleIconFile` alone is not enough on a machine that has already
+    /// cached an icon for this bundle id: Spotlight read the new `.icns` while
+    /// cmd-tab kept drawing the generic one. Assigning `applicationIconImage`
+    /// makes the running process carry its own icon, so neither cache decides.
+    private func applyDockIcon() {
+        guard let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+              let icon = NSImage(contentsOf: url) else { return }
+        NSApp.applicationIconImage = icon
     }
 
     /// Acts on a `gcal --mail` / `--calendar` request — on a cold start, and on a
@@ -147,11 +163,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
 final class SmokeRunner {
     private let root: RootController
     private let window: NSWindow?
+    private let chrome: String
     private let deadline = Date().addingTimeInterval(30)
 
-    init(root: RootController, window: NSWindow?) {
+    init(root: RootController, window: NSWindow?, chrome: String = "n/a") {
         self.root = root
         self.window = window
+        self.chrome = chrome
     }
 
     func start() { tick() }
@@ -188,6 +206,8 @@ final class SmokeRunner {
 
         print("SMOKE sources=\(report.count) window=\(window != nil) auth=\(auth) watcher=\(MailWatcher.shared.isRunning ? "on" : "off") mailMode=\(MailWatcher.shared.modeDescription)")
         print("  layout \(root.layoutSummary())")
+        print("  chrome \(chrome) "
+              + "icon=\(NSApp.applicationIconImage?.size ?? .zero)")
         print("  identity \(identity)")
         var allOK = true
         for entry in report {
