@@ -36,6 +36,16 @@ final class MailWatcher {
     /// are not signed in answer 404 and are ignored.
     var accounts = 3
 
+    /// Which Google account sits in which `u/N` slot, learned from the feeds.
+    /// The account picture is broken inside an embedded web view, so this is
+    /// how the Account menu can say who is signed in.
+    struct Mailbox: Equatable {
+        let email: String
+        let slot: Int
+    }
+
+    private(set) var mailboxes: [Mailbox] = []
+
     private var timer: Timer?
     private var seen: Set<String> = []
     private var primed = false
@@ -214,6 +224,7 @@ final class MailWatcher {
         let merged = Self.merge(result, excluding: seen)
         seen.formUnion(merged.allIDs)
         lastFeedStatus = merged.status
+        mailboxes = merged.slots
 
         if merged.countsAsUnread {
             RootController.current?.setBadge(merged.total, for: "mail")
@@ -248,6 +259,8 @@ final class MailWatcher {
         var allIDs: [String] = []
         /// False when no slot reported a count, i.e. leave the badge alone.
         var countsAsUnread = false
+        /// Slot → mailbox, for the Account menu.
+        var slots: [Mailbox] = []
     }
 
     static func merge(_ result: [String: Any], excluding seen: Set<String>) -> Merged {
@@ -272,7 +285,10 @@ final class MailWatcher {
             status.append("u\(u):\(mailbox ?? "?")")
             out.total += (slot["fullcount"] as? Int) ?? 0
             out.countsAsUnread = true
-            if let mailbox { out.mailboxes.append(mailbox) }
+            if let mailbox {
+                out.mailboxes.append(mailbox)
+                out.slots.append(Mailbox(email: mailbox, slot: u))
+            }
             let entries = (slot["entries"] as? [[String: Any]]) ?? []
             for entry in entries {
                 guard let id = entry["id"] as? String else { continue }

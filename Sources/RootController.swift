@@ -48,7 +48,10 @@ final class RootController: NSViewController, NSMenuItemValidation {
     /// Width taken by the divider between the two surfaces in split view. The
     /// hit strip is wider than the line so it is actually grabbable.
     static let dividerWidth: CGFloat = 1
-    static let dividerHitWidth: CGFloat = 9
+    /// The strip that both *resizes* and shows the resize cursor. Wider than the
+    /// line you can see: a 1 pt target is impossible to hit, and the cursor only
+    /// changing on the line itself reads as "nothing is there".
+    static let dividerHitWidth: CGFloat = 18
     /// How far apart the two surfaces may get, as fractions of the window.
     static let splitLimits: ClosedRange<CGFloat> = 0.2 ... 0.8
 
@@ -88,6 +91,14 @@ final class RootController: NSViewController, NSMenuItemValidation {
             NSCursor.resizeLeftRight.set()
         }
 
+        /// `point` arrives in the superview's coordinates, so the test is
+        /// against our own frame. Claiming the whole strip is what makes the
+        /// cursor honest across it; the visible line stays 1 pt.
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard !isHidden, frame.contains(point) else { return nil }
+            return self
+        }
+
         override func mouseDown(with event: NSEvent) {
             NSCursor.closedHand.set()
         }
@@ -121,6 +132,14 @@ final class RootController: NSViewController, NSMenuItemValidation {
     var sidebarFrame: NSRect { sidebar.frame }
     var contentFrame: NSRect { content.frame }
     var dividerFrame: NSRect { divider.frame }
+
+    /// Exposed for the selftest: does this point, in content coordinates, land on
+    /// the divider strip?
+    /// Exposed for the selftest: does this point, in content coordinates, land on
+    /// the divider strip?
+    func dividerHitTest(_ pointInContent: NSPoint) -> Bool {
+        divider.frame.contains(pointInContent)
+    }
     var popupPanelFrame: NSRect? { popups.values.first?.view.frame }
     var popupWebFrame: NSRect? { popups.values.first.map { $0.webView.frame } }
 

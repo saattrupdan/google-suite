@@ -5,6 +5,16 @@ import Foundation
 /// segment (`calendar.google.com/calendar/u/1/r/month`) or by the
 /// `?authuser=<n>` query parameter. This rewrites a URL to a given account.
 enum Accounts {
+    /// Where "add another account" goes. The account picture in Google's header
+    /// reports "Something went wrong." inside an embedded web view, so the app
+    /// asks for this page directly instead.
+    static func addAccountURL(for current: String) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        let escaped = current.addingPercentEncoding(withAllowedCharacters: allowed) ?? current
+        return "https://accounts.google.com/AddSession?hl=en&continue=\(escaped)"
+    }
+
     static let maxAccounts = 9
 
     /// Returns `url` pointed at `account` (0-based), preserving everything else.

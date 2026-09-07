@@ -127,15 +127,17 @@ enum Menus {
 
     private static func addAccountMenu(to main: NSMenu) {
         let menu = submenu("Account", in: main)
+        menu.addItem(item("Add Another Account…", #selector(WebPage.addAccount(_:)), "a",
+                          modifiers: [.command, .shift]))
         menu.addItem(item("Account Chooser…", #selector(WebPage.accountChooser(_:)), ""))
         menu.addItem(item("Apply Current Account to Both Sources",
                           #selector(RootController.applyAccountToAllSources(_:)), ""))
         menu.addItem(.separator())
         let switcher = submenu("Switch Account", in: menu)
-        for account in 0..<Accounts.maxAccounts {
-            switcher.addItem(item("Account \(account + 1)", #selector(WebPage.switchAccount(_:)), "\(account + 1)",
-                                  modifiers: [.command, .option], represented: account))
-        }
+        // Named from the feeds where possible: the header's account picture is
+        // hidden, so this and the shortcut are how you change account.
+        switcher.delegate = AccountMenu.shared
+        AccountMenu.shared.populate(switcher)
         menu.addItem(.separator())
         menu.addItem(item("Clear Sign-In…", #selector(WebPage.clearSignIn(_:)), ""))
     }
@@ -161,5 +163,36 @@ enum Menus {
         let readme = item("README on Disk", #selector(AppDelegate.openConfigFile(_:)), "", represented: "readme")
         menu.addItem(readme)
         NSApp.helpMenu = menu
+    }
+}
+
+/// Fills *Switch Account* when it opens, naming the accounts Gmail reports
+/// instead of "Account 1…9" when the feeds know.
+final class AccountMenu: NSObject, NSMenuDelegate {
+    static let shared = AccountMenu()
+
+    func populate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let known = MailWatcher.shared.mailboxes
+        if known.isEmpty {
+            for account in 0..<Accounts.maxAccounts {
+                menu.addItem(named("Account \(account + 1)", account, key: "\(account + 1)"))
+            }
+            return
+        }
+        for mailbox in known.sorted(by: { $0.slot < $1.slot }) {
+            menu.addItem(named(mailbox.email, mailbox.slot, key: "\(mailbox.slot + 1)"))
+        }
+    }
+
+    private func named(_ title: String, _ slot: Int, key: String) -> NSMenuItem {
+        let menuItem = NSMenuItem(title: title, action: #selector(WebPage.switchAccount(_:)), keyEquivalent: key)
+        menuItem.keyEquivalentModifierMask = [.command, .option]
+        menuItem.representedObject = slot
+        return menuItem
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        populate(menu)
     }
 }

@@ -55,13 +55,15 @@ final class WebPage: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDow
         source.id.contains("mail") || source.url.lowercased().contains("mail.google.com")
     }
 
-    static func defaultConfiguration() -> WKWebViewConfiguration {
+    static func defaultConfiguration(isMail: Bool = false) -> WKWebViewConfiguration {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
         let handler = NotifyHandler()
         config.userContentController.addUserScript(
             Notifier.makeUserScript(enabled: AppRuntime.shared.config.notificationsShim))
+        config.userContentController.addUserScript(
+            GmailChrome.makeUserScript(enabled: AppRuntime.shared.config.trimGmailChrome, isMail: isMail))
         config.userContentController.add(handler, name: Notifier.handlerName)
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         associatedHandlers[prefixKey] = handler
@@ -80,7 +82,8 @@ final class WebPage: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDow
         config.userContentController.addUserScript(
             Notifier.makeUserScript(enabled: AppRuntime.shared.config.notificationsShim))
         config.userContentController.addUserScript(
-            GmailChrome.makeUserScript(enabled: AppRuntime.shared.config.trimGmailChrome && isMail(source)))
+            GmailChrome.makeUserScript(enabled: AppRuntime.shared.config.trimGmailChrome,
+                                       isMail: isMail(source)))
         config.userContentController.add(handler, name: Notifier.handlerName)
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         let web = WKWebView(frame: .zero, configuration: config)
@@ -213,6 +216,11 @@ final class WebPage: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDow
     @objc func switchAccount(_ sender: Any?) {
         guard let account = (sender as? NSMenuItem)?.representedObject as? Int else { return }
         load(Accounts.url(currentURLString, account: account))
+    }
+
+    @objc func addAccount(_ sender: Any?) {
+        let url = Accounts.addAccountURL(for: currentURLString)
+        RootController.current?.showPopup(url, opener: self, configuration: nil)
     }
 
     @objc func accountChooser(_ sender: Any?) {

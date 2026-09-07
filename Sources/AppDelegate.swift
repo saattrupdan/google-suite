@@ -44,14 +44,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
 
         // Smoke drives the same path as normal use, window on screen included.
         window.show()
-        if arguments.contains("--domcheck") {
-            let probe = DomCheck(page: root.pagesByOrder.first { $0.source.id == "mail" })
-            self.domCheck = probe
-            probe.start()
+        if arguments.contains("--trimscript") {
+            // The exact JavaScript that goes into the page, so it can be
+            // syntax-checked outside the app when Google's markup shifts.
+            print(GmailChrome.scriptSource(isMail: !arguments.contains("--calendar")))
+            exit(0)
         }
         if arguments.contains("--domdump") {
-            let probe = DomDump(page: root.pagesByOrder.first { $0.source.id == "mail" })
+            // Which surface to look at; --domdump dumps the mail page.
+            let id = arguments.contains("--calendar") ? "calendar" : "mail"
+            let probe = DomDump(page: root.pagesByOrder.first { $0.source.id == id })
+            probe.onlyRightEdge = arguments.contains("--right")
             self.domDump = probe
+            probe.start()
+        }
+        if arguments.contains("--domcheck") {
+            let probe = DomCheck(pages: root.pagesByOrder)
+            self.domCheck = probe
             probe.start()
         }
         if arguments.contains("--popupprobe") {
@@ -303,18 +312,20 @@ final class PopupProbe {
 /// class names, and this is the evidence for it.
 final class DomDump {
     weak var page: WebPage?
+    /// Narrow the dump to things hugging the right edge.
+    var onlyRightEdge = false
 
     init(page: WebPage?) { self.page = page }
 
     func start() {
         guard let page else { print("DOM fail: no mail page"); exit(1) }
-        guard page.didLoad, page.currentURLString.contains("mail.google.com") else {
+        guard page.didLoad else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.start() }
             return
         }
         let js = #"""
         (() => {
-          const out = {viewport: [innerWidth, innerHeight], panels: [], header: [], hamburger: [], search: []};
+          const out = {viewport: [innerWidth, innerHeight], panels: [], header: [], hamburger: [], search: [], labeled: []};
           const info = (el) => ({
             tag: el.tagName.toLowerCase(),
             cls: (el.className || '').toString().slice(0, 90),
@@ -328,7 +339,7 @@ final class DomDump {
           });
           for (const el of document.querySelectorAll('body div, body aside, body nav')) {
             const r = el.getBoundingClientRect();
-            if (r.width < 60 || r.height < 200) continue;
+            if (r.width < 20 || r.height < 120) continue;
             if (r.width > innerWidth * 0.55 && r.height > innerHeight * 0.6) continue;   // the message list itself
             if (r.width > 300) continue;
             out.panels.push(info(el));
@@ -336,7 +347,23 @@ final class DomDump {
           for (const el of document.querySelectorAll('#gb, #gb > *, #gb * [id], #gb [aria-label], #gb form')) out.header.push(info(el));
           for (const el of document.querySelectorAll('[aria-label="Main menu"], [aria-label="Main menu"] *, .j6, .aj3')) out.hamburger.push(info(el));
           for (const el of document.querySelectorAll('div[role="search"], form[role="search"], [aria-label="Search the web"], input[name="query"]')) out.search.push(info(el));
-          out.panels = out.panels.slice(0, 45);
+          // Anything whose right edge is the window's right edge: rails, docks.
+          for (const el of document.querySelectorAll('body div, body aside, body nav, body span')) {
+            const r = el.getBoundingClientRect();
+            if (r.width < 20 || r.width > 200 || r.height < 100) continue;
+            if (Math.abs(r.maxX - innerWidth) > 14) continue;
+            out.panels.push(info(el));
+          }
+          // Everything Google labelled: the durable handle to click on.
+          for (const el of document.querySelectorAll('[aria-label], [role="button"], [role="search"], [role="complementary"], [role="navigation"]')) {
+            const r = el.getBoundingClientRect();
+            if (r.width < 8 || r.height < 8) continue;
+            const label = el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('role') || '';
+            if (!label) continue;
+            out.labeled.push({...info(el), aria: label.slice(0, 60)});
+          }
+          out.panels = out.panels.slice(0, 20);
+          out.labeled = out.labeled.slice(0, 90);
           window.__gcalDom = JSON.stringify(out);
           return window.__gcalDom;
         })();
@@ -366,61 +393,88 @@ final class DomDump {
         rows("header", "header")
         rows("hamburger", "hamburger")
         rows("search", "search")
+        rows("labeled", "labelled elements")
         exit(0)
     }
 }
 
-/// Runs GmailChrome.auditScript and turns the measurements into a verdict: the
-/// rails hidden, the header reduced to menu + wordmark + search, and the account
-/// button and menu button still reachable.
+/// Runs GmailChrome.auditScript against each surface and turns the measurements
+/// into a verdict. What must be hidden and what must stay is declared by the
+/// audit itself, so this file does not repeat the stylesheet's intent — and when
+/// Google renames its markup, the failure says so instead of the rules quietly
+/// doing nothing.
 final class DomCheck {
-    weak var page: WebPage?
+    private let pages: [WebPage]
+    private var index = 0
     private var attempt = 0
+    private var attempts = 0
+    private var failures: [String] = []
 
-    init(page: WebPage?) { self.page = page }
+    init(pages: [WebPage]) { self.pages = pages }
 
     func start() {
-        guard let page else { print("CHECK fail: no mail page"); exit(1) }
-        guard page.didLoad, page.currentURLString.contains("mail.google.com") else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.start() }
-            return
-        }
-        page.evaluate(json: GmailChrome.auditScript) { [weak self] value, error in
-            if let error { print("CHECK eval error: \(error)") }
-            if let report = value as? [String: Any], !report.isEmpty { self?.finish(report); return }
-            guard let self else { return }
-            self.attempt += 1
-            if self.attempt < 15 {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.start() }
+        guard index < pages.count else { done() ; return }
+        let page = pages[index]
+        guard page.didLoad, page.currentURLString.contains("google.com") else {
+            attempt += 1
+            if attempt < 40 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.start() }
             } else {
-                print("CHECK fail: no report")
+                print("CHECK fail: \(page.source.label) didLoad=\(page.didLoad) "
+                      + "url=\(page.currentURLString)")
                 exit(1)
             }
+            return
+        }
+        attempt = 0
+        page.evaluate(json: GmailChrome.auditScript) { [weak self] value, error in
+            guard let self else { return }
+            if let error { print("CHECK eval error: \(error)") }
+            self.attempts = 0
+            guard let report = value as? [String: Any], !report.isEmpty else {
+                self.failures.append("\(page.source.label): no report from the page")
+                self.index += 1
+                self.start()
+                return
+            }
+            self.judge(report, surface: page.source.label)
+            self.index += 1
+            self.start()
         }
     }
 
-    private func finish(_ report: [String: Any]) {
-        var failures: [String] = []
-        func group(_ name: String) -> (matched: Int, visible: Int, widest: Int) {
-            guard let raw = report[name] as? [String: Any] else { return (-1, -1, -1) }
-            return ((raw["matched"] as? Int) ?? -1, (raw["visible"] as? Int) ?? -1,
-                    (raw["widest"] as? Int) ?? -1)
+    private func judge(_ report: [String: Any], surface: String) {
+        print("CHECK \(surface):")
+        for name in report.keys.sorted() {
+            guard let raw = report[name] as? [String: Any] else { continue }
+            let matched = (raw["matched"] as? Int) ?? -1
+            let visible = (raw["visible"] as? Int) ?? -1
+            let mustHide = (raw["mustHide"] as? Bool) ?? false
+            let optional = (raw["optional"] as? Bool) ?? false
+            print("   \(name): matched=\(matched) visible=\(visible) widest=\((raw["widest"] as? Int) ?? -1)")
+            if mustHide {
+                if matched == 0 && !optional {
+                    failures.append("\(surface)/\(name): nothing matched (Google changed its markup)")
+                }
+                if visible > 0 { failures.append("\(surface)/\(name): \(visible) still visible") }
+            } else if matched > 0, visible == 0 {
+                failures.append("\(surface)/\(name): should still be visible")
+            }
         }
-        for name in ["leftRail", "rightRail", "headerExtras"] {
-            let g = group(name)
-            print("CHECK \(name): matched=\(g.matched) visible=\(g.visible) widest=\(g.widest)")
-            if g.matched == 0 { failures.append("\(name): nothing matched (Gmail changed its markup)") }
-            if g.visible > 0 { failures.append("\(name): \(g.visible) still visible") }
+        if let strip = report["rightStrip"] as? Int, strip > 0 {
+            failures.append("\(surface): \(strip) narrow element(s) still hold the right edge")
         }
-        for name in ["hamburger", "wordmark", "search", "account"] {
-            let g = group(name)
-            print("CHECK \(name): matched=\(g.matched) visible=\(g.visible) widest=\(g.widest)")
-            if g.visible == 0 { failures.append("\(name): should still be visible") }
-        }
-        print("CHECK stylesheet: \(report["sheet"] ?? "?")")
-        for (name, box) in (report["boxes"] as? [String: [Int]] ?? [:]).sorted(by: { $0.key < $1.key }) {
-            print("CHECK \(name): x=\(box[0]) width=\(box[1])")
-        }
+        print("   injected=\(report["injected"] ?? "?") runs=\(report["runs"] ?? "?") "
+              + "stylesheet=\(report["sheet"] ?? "?") "
+              + "hidden=\(report["hidden"] ?? "?") marked=\(report["marked"] ?? "?") "
+              + "rightStrip=\(report["rightStrip"] ?? "?") error=\(report["error"] ?? "?")")
+        if (report["injected"] as? String) != "yes" { failures.append("\(surface): trimming script never ran") }
+        if (report["hidden"] as? Int ?? 0) == 0 { failures.append("\(surface): cssom pass hid nothing") }
+        let error = (report["error"] as? String) ?? "none"
+        if error != "none" { failures.append("\(surface): \(error)") }
+    }
+
+    private func done() {
         print(failures.isEmpty ? "CHECK ok" : "CHECK FAIL: " + failures.joined(separator: "; "))
         exit(failures.isEmpty ? 0 : 1)
     }

@@ -273,22 +273,55 @@ enum SelfTest {
         root.splitRatio = 0.5
         let divider = root.dividerFrame
         expect(divider.width >= RootController.dividerHitWidth,
-               "the divider is grabbable (\(divider.width) wide)")
+               "the divider strip is grabbable (\(divider.width) wide)")
+        expect(divider.width >= 18, "the cursor zone is wide enough to find (\(divider.width))")
+        expect(root.dividerHitTest(CGPoint(x: divider.midX, y: divider.midY)),
+               "the middle of the strip takes the mouse")
+        expect(!root.dividerHitTest(CGPoint(x: divider.minX - 40, y: divider.midY)),
+               "clicks well away from the seam go to the page, not the divider")
         expect(abs(divider.midX - (root.contentFrame.midX - 28)) < 3 || abs(divider.midX - 572) < 3,
                "the divider sits between the two surfaces (\(divider))")
     }
 
     private static func testGmailChromeCSS() {
-        expect(GmailChrome.makeUserScript(enabled: false).source.isEmpty,
+        expect(GmailChrome.makeUserScript(enabled: false, isMail: true).source.isEmpty,
                "disabled trimming injects nothing")
-        expect(GmailChrome.makeUserScript(enabled: true).source.contains("gcal-chrome"),
-               "the stylesheet is installed under a known id")
+        let mailScript = GmailChrome.makeUserScript(enabled: true, isMail: true)
+        let calendarScript = GmailChrome.makeUserScript(enabled: true, isMail: false)
+        expect(mailScript.source.contains("gcal-chrome"), "the stylesheet is installed under a known id")
+        expect(mailScript.source.contains("aeN"), "the mail page gets the mail rules")
+        expect(calendarScript.source.contains("Switch to Tasks"), "the calendar page gets the calendar rules")
+        expect(!calendarScript.source.contains("aeN"), "Calendar is not styled as Gmail")
+        for isMail in [true, false] {
+            let css = GmailChrome.stylesheet(isMail: isMail)
+            expect(css.contains(#"aria-label="Side panel""#),
+                   "the right rail is targeted by role and label, not just a class")
+            expect(css.contains(#"aria-label^="Google Account""#), "the broken account picture is hidden")
+            expect(css.contains(#"[role="complementary"]"#), "the side panel selector uses its role")
+            // Google forbids inline <style> elements, so the stylesheet alone is
+            // not enough; the CSSOM pass is what makes it stick on Calendar.
+            let js = GmailChrome.makeUserScript(enabled: true, isMail: isMail).source
+            expect(js.contains("setProperty"), "hiding also happens through the CSSOM (CSP-proof)")
+            expect(js.contains("MutationObserver"), "re-rendered chrome is hidden again, not just once")
+        }
         // The rules must name what the live page actually renders.
         for selector in ["div.aeN[role=\"navigation\"]", "div.jAmAWb", "#gb a.FH", "#gb .lJradf"] {
-            expect(GmailChrome.stylesheet.contains(selector), "stylesheet targets \(selector)")
+            expect(GmailChrome.mailSelectors.contains(selector), "mail selectors target \(selector)")
         }
-        expect(!GmailChrome.stylesheet.contains("#gb a[aria-label^\"Google Account\"]"),
-               "the account picture is not hidden — that is where adding an account lives")
+        expect(GmailChrome.sharedSelectors.contains(#"#gb a[aria-label^="Google Account"]"#),
+               "the account picture is hidden (it only errors inside a web view)")
+        for selector in ["[aria-label=\"Create\"]", "[aria-label=\"Switch to Tasks\"]",
+                         "[aria-label=\"Settings menu\"]", "[aria-label=\"Google apps\"]",
+                         "[aria-label=\"Support\"]"] {
+            expect(GmailChrome.calendarSelectors.contains(selector), "calendar hides \(selector)")
+        }
+        expect(GmailChrome.calendarSelectors.allSatisfy { !$0.contains("Main drawer") },
+               "the calendar drawer button is left alone")
+        let addURL = Accounts.addAccountURL(for: "https://mail.google.com/mail/u/0/")
+        expect(addURL.hasPrefix("https://accounts.google.com/AddSession?hl=en&continue="),
+               "adding an account goes to Google's AddSession page")
+        expect(addURL.contains("mail.google.com") && !addURL.contains(" "),
+               "the return address is escaped into the url")
         expect(GmailChrome.auditScript.contains("leftRail"), "the audit measures the rails")
         expect(WebPage.isMail(Source(id: "mail", label: "Mail", url: "https://mail.google.com/mail/u/0/",
                                     symbol: "envelope")), "Mail is recognised as mail")
