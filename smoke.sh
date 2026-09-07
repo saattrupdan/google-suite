@@ -35,6 +35,9 @@ fi
 echo "== popup layout (window must survive a window.open panel, ${PROBE_LIMIT:-45}s) =="
 if ! run_limited "${PROBE_LIMIT:-45}" "$BIN" --popupprobe; then STATUS=1; fi
 
+echo "== gmail chrome (rails must be gone, controls must remain) =="
+if ! run_limited "${CHECK_LIMIT:-60}" "$BIN" --domcheck; then STATUS=1; fi
+
 echo "== smoke (live: calendar.google.com + mail.google.com, ${SMOKE_LIMIT}s limit) =="
 if ! run_limited "$SMOKE_LIMIT" "$BIN" --smoke; then STATUS=1; fi
 

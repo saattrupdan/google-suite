@@ -20,6 +20,8 @@ enum SelfTest {
         testRootControllerWithoutLoading()
         testSidebar()
         testSplitLayout()
+        testSplitDivider()
+        testGmailChromeCSS()
         testLinkPolicy()
         testMailWatcherGating()
         testMailAccountMerge()
@@ -59,6 +61,10 @@ enum SelfTest {
         expectEqual(config.mailPollSeconds, 60, "mail polls once a minute")
         expect(config.mailNotifications, "mail notifications default on")
         expectEqual(config.mailAccountSlots, 3, "three account slots polled by default")
+        expect(!config.splitLayout, "one surface at a time by default")
+        expect(config.openLinksInBrowser, "links go to the browser by default")
+        expect(config.trimGmailChrome, "Gmail's own rails are trimmed by default")
+        expectEqual(config.splitRatio, 0.5, "split view starts even")
         expect(config.sources[0].symbol == "envelope" && config.sources[1].symbol == "calendar",
                "rail icons are envelope and calendar")
     }
@@ -231,6 +237,8 @@ enum SelfTest {
         expect(abs(mail.width - calendar.width) < 2 && calendar.minX >= mail.maxX,
                "split view gives each surface half the width (\(mail) / \(calendar))")
         expect(mail.height > 600 && calendar.height > 600, "split surfaces fill the height")
+        expect(!root.dividerFrame.isNull && root.dividerFrame.height > 600,
+               "the divider spans the height")
 
         root.layout = .single
         expect(root.pagesByOrder[1].view.isHidden, "going back to one surface hides Calendar")
@@ -243,6 +251,55 @@ enum SelfTest {
 
     /// Links are for the browser; only the two surfaces and sign-in belong in
     /// the window.
+    private static func testSplitDivider() {
+        let root = RootController(sources: Source.defaults, loadPages: false)
+        root.view.frame = NSRect(x: 0, y: 0, width: 1200, height: 800)
+        root.view.layoutSubtreeIfNeeded()
+        root.layout = .split
+        root.splitRatio = 0.35
+        let mail = root.pagesByOrder[0].view.frame
+        let calendar = root.pagesByOrder[1].view.frame
+        expect(abs(mail.width - (1144 * 0.35)) < 3, "the ratio sets Mail's width (\(mail.width))")
+        expect(abs(calendar.maxX - 1144) < 2, "Calendar still ends at the window edge (\(calendar.maxX))")
+        expect(calendar.minX > mail.maxX, "no overlap between the two surfaces")
+
+        root.splitRatio = 0.01
+        expect(RootController.splitLimits.contains(root.splitRatio),
+               "the ratio is clamped to something usable (\(root.splitRatio))")
+        root.splitRatio = 0.99
+        expect(RootController.splitLimits.contains(root.splitRatio), "clamped from above too")
+
+        // The strip you grab is wider than the line you see.
+        root.splitRatio = 0.5
+        let divider = root.dividerFrame
+        expect(divider.width >= RootController.dividerHitWidth,
+               "the divider is grabbable (\(divider.width) wide)")
+        expect(abs(divider.midX - (root.contentFrame.midX - 28)) < 3 || abs(divider.midX - 572) < 3,
+               "the divider sits between the two surfaces (\(divider))")
+    }
+
+    private static func testGmailChromeCSS() {
+        expect(GmailChrome.makeUserScript(enabled: false).source.isEmpty,
+               "disabled trimming injects nothing")
+        expect(GmailChrome.makeUserScript(enabled: true).source.contains("gcal-chrome"),
+               "the stylesheet is installed under a known id")
+        // The rules must name what the live page actually renders.
+        for selector in ["div.aeN[role=\"navigation\"]", "div.jAmAWb", "#gb a.FH", "#gb .lJradf"] {
+            expect(GmailChrome.stylesheet.contains(selector), "stylesheet targets \(selector)")
+        }
+        expect(!GmailChrome.stylesheet.contains("#gb a[aria-label^\"Google Account\"]"),
+               "the account picture is not hidden — that is where adding an account lives")
+        expect(GmailChrome.auditScript.contains("leftRail"), "the audit measures the rails")
+        expect(WebPage.isMail(Source(id: "mail", label: "Mail", url: "https://mail.google.com/mail/u/0/",
+                                    symbol: "envelope")), "Mail is recognised as mail")
+        expect(!WebPage.isMail(Source(id: "calendar", label: "Calendar",
+                                      url: "https://calendar.google.com/calendar/u/0/r/month",
+                                      symbol: "calendar")), "Calendar is not trimmed")
+        var config = Config()
+        config.trimGmailChrome = false
+        expect(!config.trimGmailChrome, "trimming can be turned off in config")
+    }
+
     private static func testLinkPolicy() {
         let config = Config()
         let mail = config.sources.first { $0.id == "mail" }!

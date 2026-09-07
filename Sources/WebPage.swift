@@ -34,7 +34,7 @@ final class WebPage: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDow
         let handler = NotifyHandler()
         self.notifyHandler = handler
         self.isAdopted = adopted != nil
-        self.webView = adopted ?? WebPage.makeWebView(handler: handler)
+        self.webView = adopted ?? WebPage.makeWebView(handler: handler, source: source)
         super.init(nibName: nil, bundle: nil)
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -49,6 +49,11 @@ final class WebPage: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDow
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     // MARK: - Web view construction
+
+    /// Gmail gets its own stylesheet; Calendar needs none of it.
+    static func isMail(_ source: Source) -> Bool {
+        source.id.contains("mail") || source.url.lowercased().contains("mail.google.com")
+    }
 
     static func defaultConfiguration() -> WKWebViewConfiguration {
         let config = WKWebViewConfiguration()
@@ -68,12 +73,14 @@ final class WebPage: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDow
     private static var associatedHandlers: [String: NotifyHandler] = [:]
     private static let prefixKey = "default"
 
-    private static func makeWebView(handler: NotifyHandler) -> WKWebView {
+    private static func makeWebView(handler: NotifyHandler, source: Source) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         config.defaultWebpagePreferences.allowsContentJavaScript = true
         config.userContentController.addUserScript(
             Notifier.makeUserScript(enabled: AppRuntime.shared.config.notificationsShim))
+        config.userContentController.addUserScript(
+            GmailChrome.makeUserScript(enabled: AppRuntime.shared.config.trimGmailChrome && isMail(source)))
         config.userContentController.add(handler, name: Notifier.handlerName)
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         let web = WKWebView(frame: .zero, configuration: config)

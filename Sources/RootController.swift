@@ -23,7 +23,8 @@ final class RootController: NSViewController, NSMenuItemValidation {
     private(set) var sources: [Source] = []
     private var pages: [String: WebPage] = [:]
     private let content = LayoutView()
-    private let divider = NSView()
+    private let divider = SplitDivider()
+    private var dividerLine: NSView?
     private var sidebar: Sidebar!
 
     /// Popup web views we are holding open, keyed by the page that opened them.
@@ -44,8 +45,68 @@ final class RootController: NSViewController, NSMenuItemValidation {
         }
     }
 
-    /// Width taken by the divider between two surfaces in split view.
+    /// Width taken by the divider between the two surfaces in split view. The
+    /// hit strip is wider than the line so it is actually grabbable.
     static let dividerWidth: CGFloat = 1
+    static let dividerHitWidth: CGFloat = 9
+    /// How far apart the two surfaces may get, as fractions of the window.
+    static let splitLimits: ClosedRange<CGFloat> = 0.2 ... 0.8
+
+    var splitRatio: CGFloat = 0.5 {
+        didSet {
+            let clamped = min(Self.splitLimits.upperBound, max(Self.splitLimits.lowerBound, splitRatio))
+            guard clamped != oldValue else { return }
+            splitRatio = clamped
+            relayout()
+        }
+    }
+
+    /// Grab handle between the two surfaces in split view.
+    final class SplitDivider: NSView {
+        var onDrag: ((CGFloat) -> Void)?
+        var onCommit: (() -> Void)?
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            wantsLayer = true
+            addTrackingArea(NSTrackingArea(rect: .zero,
+                                           options: [.activeAlways, .inVisibleRect, .mouseMoved],
+                                           owner: self, userInfo: nil))
+        }
+
+        required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(rect: .zero,
+                                           options: [.activeAlways, .inVisibleRect, .mouseMoved],
+                                           owner: self, userInfo: nil))
+        }
+
+        override func mouseMoved(with event: NSEvent) {
+            NSCursor.resizeLeftRight.set()
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            NSCursor.closedHand.set()
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard let host = superview, host.bounds.width > 0 else { return }
+            // The divider lives in the content view, so its own width must come
+            // out of the total before the ratio is taken.
+            let room = host.bounds.width - RootController.dividerWidth
+            let x = host.convert(event.locationInWindow, from: nil).x
+            onDrag?((x + RootController.dividerWidth / 2) / max(1, room))
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            NSCursor.arrow.set()
+            onCommit?()
+        }
+    }
+
 
     /// False only for `--selftest`, which must not touch the network.
     private let loadsPages: Bool
@@ -59,6 +120,7 @@ final class RootController: NSViewController, NSMenuItemValidation {
     // Layout read-outs for --popupprobe.
     var sidebarFrame: NSRect { sidebar.frame }
     var contentFrame: NSRect { content.frame }
+    var dividerFrame: NSRect { divider.frame }
     var popupPanelFrame: NSRect? { popups.values.first?.view.frame }
     var popupWebFrame: NSRect? { popups.values.first.map { $0.webView.frame } }
 
@@ -128,9 +190,22 @@ final class RootController: NSViewController, NSMenuItemValidation {
     override func loadView() {
         let root = LayoutView(frame: NSRect(x: 0, y: 0, width: 1280, height: 800))
         root.onLayout = { [weak self] in self?.relayout() }
+        // Wide invisible strip with a thin line in the middle: a 1 pt target is
+        // impossible to grab, and a 9 pt line is ugly.
         divider.wantsLayer = true
-        divider.layer?.backgroundColor = NSColor.separatorColor.cgColor
+        divider.layer?.backgroundColor = NSColor.clear.cgColor
+        let line = NSView(frame: .zero)
+        line.wantsLayer = true
+        line.layer?.backgroundColor = NSColor.separatorColor.cgColor
+        divider.addSubview(line)
+        dividerLine = line
         divider.isHidden = true
+        divider.onDrag = { [weak self] ratio in self?.splitRatio = ratio }
+        divider.onCommit = { [weak self] in
+            guard let self else { return }
+            AppRuntime.shared.config.splitRatio = Double(self.splitRatio)
+            Config.save(AppRuntime.shared.config)
+        }
         content.wantsLayer = true
         root.addSubview(content)
         root.addSubview(sidebar)
@@ -158,13 +233,19 @@ final class RootController: NSViewController, NSMenuItemValidation {
             sidebar.setSelected(id: selectedID)
         case .split:
             divider.isHidden = false
-            let half = max(0, (content.bounds.width - Self.dividerWidth) / 2)
-            for (index, page) in pagesByOrder.enumerated() {
-                page.view.frame = NSRect(x: CGFloat(index) * (half + Self.dividerWidth), y: 0,
-                                         width: half, height: content.bounds.height)
+            let room = max(0, content.bounds.width - Self.dividerWidth)
+            let first = max(0, room * splitRatio)
+            pagesByOrder.enumerated().forEach { index, page in
+                let x = index == 0 ? 0 : first + Self.dividerWidth
+                let width = index == 0 ? first : max(0, room - first)
+                page.view.frame = NSRect(x: x, y: 0, width: width, height: content.bounds.height)
                 page.view.isHidden = false
             }
-            divider.frame = NSRect(x: half, y: 0, width: Self.dividerWidth, height: content.bounds.height)
+            // Draw the line thin, but let the pointer hit a wider strip.
+            divider.frame = NSRect(x: first - (Self.dividerHitWidth - Self.dividerWidth) / 2, y: 0,
+                                   width: Self.dividerHitWidth, height: content.bounds.height)
+            dividerLine?.frame = NSRect(x: (Self.dividerHitWidth - Self.dividerWidth) / 2, y: 0,
+                                        width: Self.dividerWidth, height: content.bounds.height)
             sidebar.setShown(ids: Set(pagesByOrder.map { $0.source.id }))
         }
     }

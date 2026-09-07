@@ -7,6 +7,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
     /// Retained: the window holds the view, not the controller.
     private var root: RootController?
     private var probe: PopupProbe?
+    private var domDump: DomDump?
+    private var domCheck: DomCheck?
     /// Held strongly: the smoke runner re-arms itself across run-loop turns.
     private var smoke: SmokeRunner?
 
@@ -30,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
 
         let root = RootController(sources: runtime.config.sources)
         root.layout = runtime.config.splitLayout ? .split : .single
+        root.splitRatio = CGFloat(runtime.config.splitRatio)
         self.root = root
         window = AppWindow(content: root)
         MailWatcher.shared.page = root.pagesByOrder.first { $0.source.id == "mail" }
@@ -41,6 +44,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
 
         // Smoke drives the same path as normal use, window on screen included.
         window.show()
+        if arguments.contains("--domcheck") {
+            let probe = DomCheck(page: root.pagesByOrder.first { $0.source.id == "mail" })
+            self.domCheck = probe
+            probe.start()
+        }
+        if arguments.contains("--domdump") {
+            let probe = DomDump(page: root.pagesByOrder.first { $0.source.id == "mail" })
+            self.domDump = probe
+            probe.start()
+        }
         if arguments.contains("--popupprobe") {
             // Retained: an unretained probe would vanish before its own timers.
             let probe = PopupProbe(root: root, window: window.window)
@@ -281,5 +294,134 @@ final class PopupProbe {
             && abs(window.width - baseline.width) < 2 && abs(window.height - baseline.height) < 2
         print("PROBE \(ok ? "ok" : "FAIL: the popup collapsed the window")")
         exit(ok ? 0 : 1)
+    }
+}
+
+/// Prints the parts of Gmail's own layout that a stylesheet would target: wide
+/// left/right containers, the header, and the hamburger button. Injected CSS has
+/// to be written against what the page actually renders, not against remembered
+/// class names, and this is the evidence for it.
+final class DomDump {
+    weak var page: WebPage?
+
+    init(page: WebPage?) { self.page = page }
+
+    func start() {
+        guard let page else { print("DOM fail: no mail page"); exit(1) }
+        guard page.didLoad, page.currentURLString.contains("mail.google.com") else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.start() }
+            return
+        }
+        let js = #"""
+        (() => {
+          const out = {viewport: [innerWidth, innerHeight], panels: [], header: [], hamburger: [], search: []};
+          const info = (el) => ({
+            tag: el.tagName.toLowerCase(),
+            cls: (el.className || '').toString().slice(0, 90),
+            id: el.id || '',
+            role: el.getAttribute('role') || '',
+            aria: el.getAttribute('aria-label') || el.getAttribute('title') || '',
+            rect: [Math.round(el.getBoundingClientRect().x), Math.round(el.getBoundingClientRect().y),
+                   Math.round(el.getBoundingClientRect().width), Math.round(el.getBoundingClientRect().height)],
+            parent: el.parentElement ? el.parentElement.tagName.toLowerCase() + '.' +
+                    (el.parentElement.className || '').toString().split(' ').slice(0, 3).join('.') : '',
+          });
+          for (const el of document.querySelectorAll('body div, body aside, body nav')) {
+            const r = el.getBoundingClientRect();
+            if (r.width < 60 || r.height < 200) continue;
+            if (r.width > innerWidth * 0.55 && r.height > innerHeight * 0.6) continue;   // the message list itself
+            if (r.width > 300) continue;
+            out.panels.push(info(el));
+          }
+          for (const el of document.querySelectorAll('#gb, #gb > *, #gb * [id], #gb [aria-label], #gb form')) out.header.push(info(el));
+          for (const el of document.querySelectorAll('[aria-label="Main menu"], [aria-label="Main menu"] *, .j6, .aj3')) out.hamburger.push(info(el));
+          for (const el of document.querySelectorAll('div[role="search"], form[role="search"], [aria-label="Search the web"], input[name="query"]')) out.search.push(info(el));
+          out.panels = out.panels.slice(0, 45);
+          window.__gcalDom = JSON.stringify(out);
+          return window.__gcalDom;
+        })();
+        """#
+        page.evaluate(json: js) { [weak self] value, error in
+            if let error { print("DOM start error: \(error)") }
+            guard let self else { return }
+            guard let value else { print("DOM fail: no result"); exit(1) }
+            // evaluate(json:) already parses a JSON string into a dictionary.
+            self.printDump(value as? [String: Any] ?? [:])
+        }
+    }
+
+    private func printDump(_ obj: [String: Any]) {
+        guard !obj.isEmpty else { print("DOM fail: empty result"); exit(1) }
+        func rows(_ key: String, _ label: String) {
+            print("DOM \(label):")
+            for rowValue in (obj[key] as? [Any] ?? []) {
+                guard let row = rowValue as? [String: Any] else { continue }
+                let rect = (row["rect"] as? [Int]) ?? []
+                let bits = rect.map(String.init).joined(separator: ",")
+                print("   \(row["tag"] ?? "?")#\(row["id"] ?? "") .\(row["cls"] ?? "") role=\(row["role"] ?? "") aria=\(row["aria"] ?? "") [\(bits)] parent=\(row["parent"] ?? "")")
+            }
+        }
+        print("DOM viewport: \((obj["viewport"] as? [Int] ?? []).map(String.init).joined(separator: "x"))")
+        rows("panels", "wide containers")
+        rows("header", "header")
+        rows("hamburger", "hamburger")
+        rows("search", "search")
+        exit(0)
+    }
+}
+
+/// Runs GmailChrome.auditScript and turns the measurements into a verdict: the
+/// rails hidden, the header reduced to menu + wordmark + search, and the account
+/// button and menu button still reachable.
+final class DomCheck {
+    weak var page: WebPage?
+    private var attempt = 0
+
+    init(page: WebPage?) { self.page = page }
+
+    func start() {
+        guard let page else { print("CHECK fail: no mail page"); exit(1) }
+        guard page.didLoad, page.currentURLString.contains("mail.google.com") else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.start() }
+            return
+        }
+        page.evaluate(json: GmailChrome.auditScript) { [weak self] value, error in
+            if let error { print("CHECK eval error: \(error)") }
+            if let report = value as? [String: Any], !report.isEmpty { self?.finish(report); return }
+            guard let self else { return }
+            self.attempt += 1
+            if self.attempt < 15 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { self.start() }
+            } else {
+                print("CHECK fail: no report")
+                exit(1)
+            }
+        }
+    }
+
+    private func finish(_ report: [String: Any]) {
+        var failures: [String] = []
+        func group(_ name: String) -> (matched: Int, visible: Int, widest: Int) {
+            guard let raw = report[name] as? [String: Any] else { return (-1, -1, -1) }
+            return ((raw["matched"] as? Int) ?? -1, (raw["visible"] as? Int) ?? -1,
+                    (raw["widest"] as? Int) ?? -1)
+        }
+        for name in ["leftRail", "rightRail", "headerExtras"] {
+            let g = group(name)
+            print("CHECK \(name): matched=\(g.matched) visible=\(g.visible) widest=\(g.widest)")
+            if g.matched == 0 { failures.append("\(name): nothing matched (Gmail changed its markup)") }
+            if g.visible > 0 { failures.append("\(name): \(g.visible) still visible") }
+        }
+        for name in ["hamburger", "wordmark", "search", "account"] {
+            let g = group(name)
+            print("CHECK \(name): matched=\(g.matched) visible=\(g.visible) widest=\(g.widest)")
+            if g.visible == 0 { failures.append("\(name): should still be visible") }
+        }
+        print("CHECK stylesheet: \(report["sheet"] ?? "?")")
+        for (name, box) in (report["boxes"] as? [String: [Int]] ?? [:]).sorted(by: { $0.key < $1.key }) {
+            print("CHECK \(name): x=\(box[0]) width=\(box[1])")
+        }
+        print(failures.isEmpty ? "CHECK ok" : "CHECK FAIL: " + failures.joined(separator: "; "))
+        exit(failures.isEmpty ? 0 : 1)
     }
 }

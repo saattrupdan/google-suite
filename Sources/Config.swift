@@ -54,13 +54,20 @@ struct Config: Codable {
     /// Where a link goes: `true` (the default) sends anything that is not Mail
     /// or Calendar to your browser.
     var openLinksInBrowser = true
+    /// How much of the window Mail gets in split view, 0.2 … 0.8. Drag the
+    /// divider to change it; it is remembered.
+    var splitRatio: Double = 0.5
+    /// Trim Gmail's own side rails and header buttons with injected CSS. Google
+    /// changes these class names between releases, so it is all best-effort and
+    /// can be switched off in one line.
+    var trimGmailChrome = true
 
 
     static let defaults = Config()
 
     enum CodingKeys: String, CodingKey {
         case sources, allowHosts, openMeetInApp, notificationsShim, mailNotifications
-        case splitLayout, openLinksInBrowser
+        case splitLayout, openLinksInBrowser, splitRatio, trimGmailChrome
         case mailPollSeconds
         case mailAccountSlots, userAgent
         // Read-only aliases, so an older config still loads.
@@ -90,6 +97,8 @@ struct Config: Codable {
         mailAccountSlots = max(1, (try? c.decode(Int.self, forKey: .mailAccountSlots)) ?? 3)
         splitLayout = (try? c.decode(Bool.self, forKey: .splitLayout)) ?? false
         openLinksInBrowser = (try? c.decode(Bool.self, forKey: .openLinksInBrowser)) ?? true
+        splitRatio = min(0.8, max(0.2, (try? c.decode(Double.self, forKey: .splitRatio)) ?? 0.5))
+        trimGmailChrome = (try? c.decode(Bool.self, forKey: .trimGmailChrome)) ?? true
         userAgent = (try? c.decode(String.self, forKey: .userAgent)) ?? nil
         if sources.isEmpty { sources = Source.defaults }
     }
@@ -106,9 +115,13 @@ struct Config: Codable {
         try c.encode(mailAccountSlots, forKey: .mailAccountSlots)
         try c.encode(splitLayout, forKey: .splitLayout)
         try c.encode(openLinksInBrowser, forKey: .openLinksInBrowser)
+        try c.encode(splitRatio, forKey: .splitRatio)
+        try c.encode(trimGmailChrome, forKey: .trimGmailChrome)
         try c.encode(mailAccountSlots, forKey: .mailAccountSlots)
         try c.encode(splitLayout, forKey: .splitLayout)
         try c.encode(openLinksInBrowser, forKey: .openLinksInBrowser)
+        try c.encode(splitRatio, forKey: .splitRatio)
+        try c.encode(trimGmailChrome, forKey: .trimGmailChrome)
         try c.encodeIfPresent(userAgent, forKey: .userAgent)
     }
 

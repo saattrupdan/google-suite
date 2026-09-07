@@ -38,14 +38,46 @@ so Google does not reject it as an embedded web view.
 * **Left rail** — Mail, then Calendar. Icon only; the source you are looking at is
   **blue**, the other one grey, and unread mail shows as a red badge on the envelope.
   `⌘1` / `⌘2`, or `⌃⇥` to cycle.
-* **Side by side** (`⌘\`) — Mail and Calendar split the window evenly, both live at once.
-  Worth it on a large monitor; off by default. In split view both rail icons are blue,
-  because both are shown.
+* **Side by side** (`⌘\`) — Mail and Calendar split the window, both live at once. Worth
+  it on a large monitor; off by default. In split view both rail icons are blue, because
+  both are shown. **Drag the divider** to give one side more room; the split is remembered
+  (`splitRatio`), and it never goes past 80/20 either way.
+* **Trimmed Gmail interface** — Gmail's own label rail on the left and its Meet/Chat/Keep
+  rail on the right are hidden, and its header is reduced to the menu button, the wordmark,
+  search and your account picture. See [Trimming Gmail's interface](#trimming-gmails-interface).
 * No tabs, no address bar, no back/forward. Two surfaces, not a browser.
 
 Sign-in popups (`window.open`) appear as a panel over the content and close themselves
 when the flow finishes; the page that opened them keeps its `window.opener` link, so
 Google's popup can report back.
+
+## Trimming Gmail's interface
+
+Gmail ships two side rails and a header full of Google's own buttons. In a window that is
+meant to show mail, all of that is noise, so a stylesheet is injected into
+`mail.google.com`: the left label rail and the right-hand app rail are hidden, and the
+header keeps only the **menu button** (the hamburger — which is what opens the inbox list,
+so trimming the rails costs you nothing), the **wordmark**, **search**, and your **account
+picture** — that one stays because it is where *Add another account* lives. Drop this line
+in to remove it anyway:
+
+```css
+#gb a[aria-label^="Google Account"] { display: none !important; }
+```
+
+Be clear about what this is: CSS applied to Google's page, written against what the page
+renders today. Gmail renames its `gb_`/`aeN`/`jAmAWb` classes between releases, and when it
+does, the rules quietly stop matching. `./smoke.sh` therefore runs a live check that
+measures the result rather than trusting the selectors:
+
+```sh
+"./Google Suite.app/Contents/MacOS/Google Suite" --domcheck
+# CHECK leftRail: matched=2 visible=0     CHECK hamburger: matched=1 visible=1
+```
+
+If it ever reports `nothing matched (Gmail changed its markup)`, run
+`… --domdump` to see the current structure and update the selectors in
+`Sources/GmailChrome.swift`. To stop touching Gmail at all: `"trimGmailChrome": false`.
 
 ## Links
 
@@ -116,6 +148,8 @@ an account in Apple's Mail app.
   "openMeetInApp": false,
   "openLinksInBrowser": true,
   "splitLayout": false,
+  "splitRatio": 0.5,
+  "trimGmailChrome": true,
   "notificationsShim": true,
   "mailNotifications": true,
   "mailPollSeconds": 60,
@@ -130,6 +164,9 @@ an account in Apple's Mail app.
   sign-in opens in your browser. `false` restores the older behaviour of keeping any host
   listed in `allowHosts` inside the window.
 * **splitLayout** — start in split view rather than one surface at a time.
+* **splitRatio** — how much of the window Mail gets in split view (0.2 … 0.8). Dragging the
+  divider writes it.
+* **trimGmailChrome** — inject the Gmail stylesheet described above.
 * **allowHosts** — *extra* hosts that may stay in the window. Empty by default; it used to
   list Drive, Docs, Keep and `google.com`, which turned every link into a page in here.
 * **openMeetInApp** — `false` (default) sends genuine Meet links to your browser. Google's
@@ -157,10 +194,10 @@ an account in Apple's Mail app.
 ## Tests
 
 ```sh
-./smoke.sh          # SELFTEST, then the popup layout stage, then SMOKE — each with a watchdog
+./smoke.sh   # selftest, popup layout, live Gmail-chrome check, then smoke — each with a watchdog
 ```
 
-* `--selftest` — 116 offline checks: source order, config recovery from malformed and
+* `--selftest` — 139 offline checks: source order, config recovery from malformed and
   legacy files, host allow-list against look-alike domains, **Meet join-vs-warm-up
   classification**, account URL rewriting, blank-popup handling, unread-count parsing,
   **account-merge dedup** (three slots, one mailbox, one badge), rail selection, tint and
@@ -188,6 +225,7 @@ Sources/RootController.swift rail + content, popup panels, account-wide reload
 Sources/Sidebar.swift       icon rail and unread badge
 Sources/WebPage.swift       one WKWebView: navigation policy, popups, downloads, JS panels
 Sources/MailWatcher.swift   new-mail polling, both tiers, merged across accounts
+Sources/GmailChrome.swift   the stylesheet that trims Gmail's rails, and the live check
 Sources/Config.swift        config, host policy, Meet classification, user agent
 Sources/Accounts.swift      ?authuser=N / /u/N/ rewriting for Google multi-login
 Sources/Menus.swift         the menu bar
