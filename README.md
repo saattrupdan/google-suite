@@ -51,33 +51,71 @@ Sign-in popups (`window.open`) appear as a panel over the content and close them
 when the flow finishes; the page that opened them keeps its `window.opener` link, so
 Google's popup can report back.
 
-## Trimming Gmail's interface
+## Trimming Google's interface
 
-Gmail ships two side rails and a header full of Google's own buttons. In a window that is
-meant to show mail, all of that is noise, so a stylesheet is injected into
-`mail.google.com`: the left label rail and the right-hand app rail are hidden, and the
-header keeps only the **menu button** (the hamburger — which is what opens the inbox list,
-so trimming the rails costs you nothing), the **wordmark**, **search**, and your **account
-picture** — that one stays because it is where *Add another account* lives. Drop this line
-in to remove it anyway:
+Both surfaces show their product and nothing else. Gone: Gmail's label rail and
+right dock, Calendar's search / support / settings buttons, the Calendar↔Tasks
+toggle, the **Create** button, Google's apps launcher and the account picture.
+Also the right-hand strip with Keep / Tasks / Contacts / Clock — in *both*
+products that is the same element, `role="complementary"` labelled *"Side
+panel"*; hiding only an inner wrapper leaves a 56 pt empty column standing where
+the rail was. The header keeps the **menu button** (the hamburger or, in
+Calendar, the drawer — that is how you open the list of inboxes or calendars),
+the **wordmark**, and **search**.
 
-```css
-#gb a[aria-label^="Google Account"] { display: none !important; }
-```
+Two things make this more than writing CSS, and neither is obvious:
 
-Be clear about what this is: CSS applied to Google's page, written against what the page
-renders today. Gmail renames its `gb_`/`aeN`/`jAmAWb` classes between releases, and when it
-does, the rules quietly stop matching. `./smoke.sh` therefore runs a live check that
-measures the result rather than trusting the selectors:
+* **Google forbids inline `<style>` elements.** An injected stylesheet is
+  applied on Gmail and dropped without a word on Calendar. So the rules are
+  *also* applied through the CSSOM — `element.style.setProperty(...)` — which
+  CSP does not count as an inline style and which works on both.
+* **`requestAnimationFrame` does not run in a web view that is not on screen**,
+  which is exactly the state the second surface is in while it loads. A
+  frame-scheduled pass silently never executes, so trimming runs immediately,
+  again on every DOM mutation, and again at fixed delays.
+
+Selectors are written against `role` and `aria-label`, measured from the live
+pages, because the obfuscated classes change every release. It is still surgery
+on a page the app does not control: a Google release can rename everything and
+the rules will quietly do nothing. `--domcheck` is the guard — it measures each
+thing on **every** surface and fails when something that must be gone is visible,
+when a rule matched *nothing at all* (the markup moved), when the trimming script
+never ran, and when something narrow still holds the right edge:
 
 ```sh
 "./Google Suite.app/Contents/MacOS/Google Suite" --domcheck
-# CHECK leftRail: matched=2 visible=0     CHECK hamburger: matched=1 visible=1
+# CHECK Mail:      rightRail: matched=5 visible=0   hidden=20 rightStrip=0 …
+# CHECK Calendar:  railTabs:  matched=3 visible=0   hidden=52 rightStrip=0 …
+# CHECK ok
 ```
 
-If it ever reports `nothing matched (Gmail changed its markup)`, run
-`… --domdump` to see the current structure and update the selectors in
-`Sources/GmailChrome.swift`. To stop touching Gmail at all: `"trimGmailChrome": false`.
+When it reports `nothing matched`, run `--domdump` to see the current structure
+and update `Sources/GmailChrome.swift`; `--trimscript` prints the exact
+JavaScript that gets injected, so it can be `node --check`ed when a page starts
+rejecting it. To stop touching Google's pages: `"trimGmailChrome": false`.
+
+## Accounts
+
+The account picture in Google's header is hidden on purpose: inside an embedded
+web view it does nothing useful, reporting *"Something went wrong."* whenever you
+click it. Account switching lives in the **Account** menu instead:
+
+* **Add Another Account…** (⇧⌘A) opens Google's add-account page as a panel in
+  the window, and the new session lands in the next `u/N` slot.
+* **Switch Account** (⌥⌘1…9) lists the addresses Gmail actually reports —
+  `MailWatcher` learns which slot is which mailbox from the Atom feeds, so the
+  menu says `dan@syv.ai` rather than "Account 1".
+* **Apply Current Account to Both Sources** keeps mail and calendar on the same
+  account.
+
+A merged *unread badge* across accounts is automatic — counts are summed per
+mailbox, so an account appearing in two slots is not counted twice. A merged
+*inbox* is not something an app can do: Gmail shows one mailbox at a time. The
+Google-side answer is forwarding plus *Send mail as* (Settings → Accounts and
+Import), or POP for the second account. Calendars merge the same way — add the
+colleague's calendar under Settings → *Add by address* and one month view shows
+both.
+
 
 ## Links
 
@@ -188,6 +226,7 @@ an account in Apple's Mail app.
 | `⌘R` / `⌥⌘⇧R` | reload this source / reload both |
 | `⌥⌘K` | check mail now |
 | `⌥⌘1`…`⌥⌘9` | this source onto Google account N |
+| `⇧⌘A` | add another Google account |
 | `⌥⌘O` | open this page in your browser |
 | `⌘,` | open the config file |
 
