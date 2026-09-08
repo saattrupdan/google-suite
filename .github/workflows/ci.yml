@@ -20,7 +20,7 @@ jobs:
         run: ./build.sh
 
       - name: Logic checks
-        run: "./Google Suite.app/Contents/MacOS/Google Suite" --selftest
+        run: '"./Google Suite.app/Contents/MacOS/Google Suite" --selftest'
 
       - name: The JavaScript injected into Google's pages parses
         run: |
