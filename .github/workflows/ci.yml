@@ -30,6 +30,12 @@ jobs:
           "./Google Suite.app/Contents/MacOS/Google Suite" --trimscript --calendar \
             | node --check /dev/stdin
 
+      - name: Dependency-free DOM fixtures
+        run: |
+          node --check tests/chrome-fixtures.js
+          "./Google Suite.app/Contents/MacOS/Google Suite" --trimhelpers \
+            | node tests/chrome-fixtures.js
+
       - name: Bundle is well-formed
         run: |
           plutil -lint "Google Suite.app/Contents/Info.plist"

@@ -95,13 +95,25 @@ Two exceptions keep that rule honest, both measured rather than assumed:
   version concluded from that that the toolbars were empty and hid them. An
   unmeasurable subtree now counts as occupied, and the pass runs again on `load`.
 
-`--domcheck` covers both: `navControls` and `toolbarControls` fail when the
-product's own navigation or the toolbar row under the header goes missing, and
-`--domcheck --why` prints what each rule hid and why (`selector`, `header-zone`,
-`collapse`) — the only practical way to find out which of 20 hidden elements was
-the one you needed. `--domdump` and `--domcheck` show both surfaces while they
+`--domcheck` covers both: exact checks fail when Gmail's visible
+Gemini/Studio launcher survives, or when Calendar's real text-bearing
+`Montharrow_drop_down` view dropdown / previous/next navigation goes missing.
+The separate compact `Filter and view` icon is hidden, not used as a substitute.
+The audit requires viewport intersection, center-point hit testing, and no pairwise
+overlap for visible Calendar controls. The Calendar probe clicks the real dropdown,
+requires a newly visible menu whose Day/Week/Month items are all hittable, and
+proves that same menu instance was hidden or removed; a zero-sized duplicate cannot
+satisfy it. `--domcheck --why` prints what each rule hid and why
+(`selector`, `header-zone`, `collapse`) — the only practical way to find out which
+of 20 hidden elements was the one you needed. `--domdump` and `--domcheck` show both surfaces while they
 measure, because a hidden web view is never laid out and would report zeros;
-`--fullwidth` opts out. It is still surgery
+`--fullwidth` explicitly forces the requested source into a single full-width
+surface (even when `splitLayout` is persisted), without saving that temporary
+choice. `--no-trim --calendar --fullwidth --domdump` is a safe native-DOM
+comparison: trimming is disabled in memory only and the persisted config is untouched. Pass `--calendar` with it to diagnose Calendar. `--domcontrols` prints
+every header/right-area interactive control with ancestry, own text,
+image/SVG signatures, hidden markers, and computed display/visibility. It is
+still surgery
 on a page the app does not control: a Google release can rename everything and
 the rules will quietly do nothing. `--domcheck` is the guard — it measures each
 thing on **every** surface and fails when something that must be gone is visible,
@@ -266,15 +278,24 @@ old `~/.config/gcal-app/` are picked up automatically once):
 SKIP_SMOKE=1 ./smoke.sh    # offline half only
 ```
 
-* `--selftest` — 167 offline checks: source order, config recovery from malformed
+* `--selftest` — 174 offline checks: source order, config recovery from malformed
   and legacy files, host policy against look-alike domains, Meet join-vs-warm-up
   classification, account URL rewriting, blank-popup handling, unread-count
   parsing, account-merge dedup (three slots, one mailbox, one badge), rail
   selection, tint and badges, watcher gating, menu shape, split geometry and the
   divider's hit strip, the trimming selectors and the CSSOM/CSP workarounds, and
   that the popup panel stays constraint-free.
-* `--domcheck` — the live verdict on both surfaces. Needs a signed-in profile,
-  so it runs on your machine, not in CI.
+* `--domcheck` — the live verdict on both surfaces. It asserts that no visible
+  Gemini/Studio launcher remains in Gmail, that the 56px Search mail control
+  remains visible and hittable, and that Calendar's real text-bearing
+  `Montharrow_drop_down` view button and Previous/Next controls are visible,
+  hittable, in the viewport, and non-overlapping. It also clicks the real menu and
+  checks Day/Week/Month choices. Needs a signed-in profile.
+* `--no-trim` — diagnostic-only native comparison flag. It disables trimming for
+  this process without changing the persisted config; combine with
+  `--calendar --fullwidth --domdump` to measure Google's native controls.
+* `--domcontrols` — diagnostic inventory for one requested surface, including
+  computed visibility, signatures, and ancestry for icon-only header controls.
 * `--smoke` — builds the real window and prints what it became: rail width, pages
   attached and visible, popup count, notification authorisation, which mail tier
   is live, the chrome (`titlebar=hidden fullSize=true toolbar=none`) and the icon
@@ -289,7 +310,9 @@ SKIP_SMOKE=1 ./smoke.sh    # offline half only
 
 CI (`.github/workflows/ci.yml`) runs on `macos-latest` and covers everything that
 needs neither a window server nor a Google session: the build, `--selftest`,
-`--trimscript | node --check` for both surfaces, and a lint of the built bundle.
+`--trimscript | node --check` for both surfaces, the dependency-free DOM fixtures
+(`tests/chrome-fixtures.js`, including zero-size menu and nested Gmail icon
+adversaries), and a lint of the built bundle.
 The live half cannot run there, since it would need your Google login — run
 `--domcheck` yourself after a Google release, and `--domdump` when it complains.
 

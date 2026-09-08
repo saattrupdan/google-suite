@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
     private var root: RootController?
     private var probe: PopupProbe?
     private var domDump: DomDump?
+    private var domControls: DomControls?
     private var domCheck: DomCheck?
     /// Held strongly: the smoke runner re-arms itself across run-loop turns.
     private var smoke: SmokeRunner?
@@ -31,11 +32,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         }
 
         let root = RootController(sources: runtime.config.sources)
-        root.layout = runtime.config.splitLayout ? .split : .single
+        // --fullwidth is a probe mode, not a config override: make the selected
+        // source actually fill the content area even when splitLayout=true is
+        // persisted, without writing anything back to the user's config.
+        root.layout = arguments.contains("--fullwidth")
+            ? .single : (runtime.config.splitLayout ? .split : .single)
+        if arguments.contains("--fullwidth"), arguments.contains("--calendar") {
+            // Selecting the requested source matters even in single layout:
+            // the other WKWebView remains hidden and therefore reports only
+            // zero-sized DOM boxes to a probe.
+            root.select(id: "calendar")
+        }
         // A hidden web view is never laid out, so its DOM reports zero for
         // everything — measuring trimming on a surface that is not on screen
         // proves nothing. The probes show both surfaces whatever the setting is.
-        if (arguments.contains("--domcheck") || arguments.contains("--domdump"))
+        if (arguments.contains("--domcheck") || arguments.contains("--domdump") || arguments.contains("--domcontrols"))
             && !arguments.contains("--fullwidth") {
             // Show both surfaces so both get laid out.
             root.layout = .split
@@ -53,6 +64,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
 
         // Smoke drives the same path as normal use, window on screen included.
         window.show()
+        if arguments.contains("--fullwidth"), arguments.contains("--calendar") {
+            // Re-select after the window has laid out; a cold-start reveal can
+            // otherwise leave the requested WKWebView at its pre-layout zero
+            // frame while the probe starts.
+            root.select(id: "calendar")
+        }
         if arguments.contains("--domdump") {
             // Which surface to look at; --domdump dumps the mail page.
             let id = arguments.contains("--calendar") ? "calendar" : "mail"
@@ -65,8 +82,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
             self.domDump = probe
             probe.start()
         }
+        if arguments.contains("--domcontrols") {
+            let id = arguments.contains("--calendar") ? "calendar" : "mail"
+            let probe = DomControls(page: root.pagesByOrder.first { $0.source.id == id })
+            self.domControls = probe
+            probe.start()
+        }
         if arguments.contains("--domcheck") {
-            let probe = DomCheck(pages: root.pagesByOrder)
+            // --fullwidth is deliberately a one-surface probe. --calendar (or
+            // the default Mail source) chooses which page the verdict covers;
+            // without it, the narrow split check covers both surfaces.
+            let pages = arguments.contains("--fullwidth")
+                ? root.pagesByOrder.filter { $0.source.id == (arguments.contains("--calendar") ? "calendar" : "mail") }
+                : root.pagesByOrder
+            let probe = DomCheck(pages: pages)
             probe.verbose = arguments.contains("--why")
             self.domCheck = probe
             probe.start()
@@ -441,6 +470,59 @@ final class DomDump {
     }
 }
 
+/// Prints the live interactive controls in the header/right area. This is
+/// deliberately more detailed than the pass/fail audit: icon-only controls and
+/// hidden duplicate render trees need ancestry and image/SVG signatures before
+/// a durable selector can be chosen.
+final class DomControls {
+    weak var page: WebPage?
+    init(page: WebPage?) { self.page = page }
+
+    func start() {
+        guard let page else { print("CONTROLS fail: no page"); exit(1) }
+        guard page.didLoad else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.start() }
+            return
+        }
+        page.evaluate(json: GmailChrome.controlsScript) { value, error in
+            if let error { print("CONTROLS eval error: \(error)") }
+            guard let value, let report = value as? [String: Any] else {
+                print("CONTROLS fail: no result"); exit(1)
+            }
+            self.printReport(report, surface: page.source.label)
+        }
+    }
+
+    private func printReport(_ report: [String: Any], surface: String) {
+        let viewport = (report["viewport"] as? [Int] ?? []).map(String.init).joined(separator: "x")
+        print("CONTROLS \(surface) viewport=\(viewport) detail=\(report["viewportDetail"] ?? [:])")
+        for raw in report["controls"] as? [[String: Any]] ?? [] {
+            let rect = (raw["rect"] as? [Int] ?? []).map(String.init).joined(separator: ",")
+            let signature = raw["signature"] as? [String: Any] ?? [:]
+            let image = signature["image"] as? [String: Any]
+            let svg = signature["svg"] as? [String: Any]
+            let imageMark = image.map { " img=\($0["alt"] ?? "") \($0["src"] ?? "")" } ?? ""
+            let svgMark = svg.map { " svg=\($0["viewBox"] ?? "") \($0["path"] ?? "")" } ?? ""
+            let flags = "visible=\(raw["visible"] ?? false) display=\(raw["display"] ?? "?") "
+                + "visibility=\(raw["visibility"] ?? "?") hidden=\(raw["hidden"] ?? false) "
+                + "ariaHidden=\(raw["ariaHidden"] ?? "") suiteHidden=\(raw["suiteHidden"] ?? "") "
+                + "centerHit=\(raw["hit"] ?? "none")"
+            let ancestry = (raw["ancestry"] as? [String] ?? []).joined(separator: " <- ")
+            print("  \(raw["tag"] ?? "?") role=\(raw["role"] ?? "") aria=\(raw["aria"] ?? "") "
+                + "own=\(raw["ownText"] ?? "") text=\(raw["text"] ?? "") [\(rect)] \(flags)\(imageMark)\(svgMark)")
+            print("    ancestry: \(ancestry)")
+            if let blockers = raw["blockers"] as? [[String: Any]], !blockers.isEmpty {
+                for blocker in blockers {
+                    let brect = (blocker["rect"] as? [Int] ?? []).map(String.init).joined(separator: ",")
+                    let inline = blocker["inline"] as? [String: Any] ?? [:]
+                    print("    calendar-wrapper \(blocker["tag"] ?? "?").\(blocker["cls"] ?? "") [\(brect)] display=\(blocker["display"] ?? "?") visibility=\(blocker["visibility"] ?? "?") opacity=\(blocker["opacity"] ?? "?") position=\(blocker["position"] ?? "?") left=\(blocker["left"] ?? "?") right=\(blocker["right"] ?? "?") marginLeft=\(blocker["marginLeft"] ?? "?") transform=\(blocker["transform"] ?? "?") flex=\(blocker["flex"] ?? "?") inline=\(inline)")
+                }
+            }
+        }
+        exit(0)
+    }
+}
+
 /// Runs GmailChrome.auditScript against each surface and turns the measurements
 /// into a verdict. What must be hidden and what must stay is declared by the
 /// audit itself, so this file does not repeat the stylesheet's intent — and when
@@ -454,6 +536,9 @@ final class DomCheck {
     private var attempt = 0
     private var attempts = 0
     private var failures: [String] = []
+    /// Two consecutive cycles on the same live page catch Google's retained,
+    /// off-screen menu node being mistaken for an already-open menu.
+    private var calendarMenuReports: [[String: Any]] = []
 
     init(pages: [WebPage]) { self.pages = pages }
 
@@ -471,18 +556,75 @@ final class DomCheck {
             }
             return
         }
+        // A page can report didLoad while its WKWebView is still transitioning
+        // from its initial zero/split layout to the requested probe geometry.
+        // Let the injected interval/resize pass settle before treating DOM
+        // coordinates as a live verdict.
+        if attempt < 30 {
+            attempt += 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.start() }
+            return
+        }
         attempt = 0
+        if page.source.id == "calendar", calendarMenuReports.count < 2 {
+            page.evaluate(json: GmailChrome.calendarMenuProbeScript) { [weak self] _, error in
+                guard let self else { return }
+                if let error {
+                    self.calendarMenuReports.append(
+                        ["status": "failed", "error": error, "closed": false])
+                    self.evaluateCalendarAudit(page)
+                    return
+                }
+                self.pollCalendarMenu(page, tries: 0)
+            }
+            return
+        }
+        evaluateCalendarAudit(page)
+    }
+
+    private func pollCalendarMenu(_ page: WebPage, tries: Int) {
+        page.evaluate(json: GmailChrome.calendarMenuProbePollScript, timeout: 3) { [weak self] value, error in
+            guard let self else { return }
+            if let state = value as? [String: Any],
+               ((state["status"] as? String) == "pending"
+                || (state["status"] as? String) == "closing"
+                || !(state["closed"] as? Bool ?? false)), tries < 80 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    self.pollCalendarMenu(page, tries: tries + 1)
+                }
+                return
+            }
+            if let state = value as? [String: Any] {
+                self.calendarMenuReports.append(state)
+            } else {
+                self.calendarMenuReports.append(
+                    ["status": "failed", "error": error ?? "no probe state", "closed": false])
+            }
+            if self.calendarMenuReports.count < 2 {
+                // Exercise the retained exact DOM node again on the same page.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                    self?.start()
+                }
+            } else {
+                self.evaluateCalendarAudit(page)
+            }
+        }
+    }
+
+    private func evaluateCalendarAudit(_ page: WebPage) {
         page.evaluate(json: GmailChrome.auditScript) { [weak self] value, error in
             guard let self else { return }
             if let error { print("CHECK eval error: \(error)") }
             self.attempts = 0
             guard let report = value as? [String: Any], !report.isEmpty else {
                 self.failures.append("\(page.source.label): no report from the page")
+                self.calendarMenuReports = []
                 self.index += 1
                 self.start()
                 return
             }
             self.judge(report, surface: page.source.label)
+            self.calendarMenuReports = []
             self.index += 1
             self.start()
         }
@@ -510,8 +652,71 @@ final class DomCheck {
             print("   hid \(log.count) of \(report["hidden"] ?? "?"):")
             for line in log { print("      \(line)") }
         }
-        if let toolbar = report["toolbarControls"] as? Int, toolbar == 0 {
-            failures.append("\(surface): the toolbar row under the header is empty")
+        if let gemini = report["geminiLauncher"] as? [String: Any],
+           let visible = gemini["visible"] as? Int, visible > 0 {
+            failures.append("\(surface): visible Gmail Gemini launcher(s): \(visible)")
+        }
+        if surface.lowercased().contains("mail") {
+            let gmail = report["gmailControls"] as? [String: Any] ?? [:]
+            let askControls = gmail["askGemini"] as? [[String: Any]] ?? []
+            let searchControls = gmail["searchMail"] as? [[String: Any]] ?? []
+            print("   Gmail geometry Ask Gemini=\(askControls) Search mail=\(searchControls)")
+            if askControls.contains(where: { $0["visible"] as? Bool == true }) {
+                failures.append("\(surface): live button[aria-label='Ask Gemini'] is still visible")
+            }
+            let searchOK = searchControls.contains { control in
+                guard control["visible"] as? Bool == true,
+                      control["inViewport"] as? Bool == true,
+                      control["hit"] as? Bool == true else { return false }
+                let rect = control["rect"] as? [Int] ?? []
+                return rect.count >= 4 && rect[2] >= 50
+            }
+            if !searchOK {
+                failures.append("\(surface): 56px Search mail control is not visible, hittable, and in the viewport (\(searchControls))")
+            }
+        }
+        if surface.lowercased().contains("calendar") {
+            let view = report["calendarViewOptions"] as? [String: Any] ?? [:]
+            let matched = view["matched"] as? Int ?? 0
+            let filter = view["filterIcon"] as? [String: Any]
+            let filterVisible = filter?["visible"] as? Bool ?? false
+            print("   Calendar geometry View=\(view["viewButton"] ?? [:]) FilterIcon=\(filter ?? [:])")
+            let validControl = { (control: [String: Any]?) -> Bool in
+                control?["visible"] as? Bool == true
+                    && control?["inViewport"] as? Bool == true
+                    && control?["hit"] as? Bool == true
+            }
+            let viewButton = view["viewButton"] as? [String: Any]
+            if matched < 1 || !validControl(viewButton)
+                || filterVisible
+                || (view["noOverlap"] as? Bool ?? false) == false {
+                failures.append("\(surface): Calendar Montharrow_drop_down failed geometry/hit-test (matched=\(matched), view=\(viewButton ?? [:]), filter=\(filter ?? [:]), overlap=\(view["noOverlap"] ?? "missing"))")
+            }
+            if calendarMenuReports.count != 2 {
+                failures.append("\(surface): expected two Calendar menu cycles, got \(calendarMenuReports.count)")
+            }
+            for (cycle, probe) in calendarMenuReports.enumerated() {
+                print("   Calendar menu probe #\(cycle + 1) Raw=\(probe["rawMenu"] ?? [:]) Open=\(probe["openMenu"] ?? [:]) Final=\(probe["finalMenu"] ?? [:]) Button=\(probe["buttonState"] ?? [:])")
+                let status = probe["status"] as? String ?? "missing"
+                let choices = probe["choices"] as? [String] ?? []
+                let choiceText = choices.joined(separator: " ").lowercased()
+                if status != "ok" || !(probe["closed"] as? Bool ?? false)
+                    || !choiceText.contains("month") || !choiceText.contains("week") {
+                    failures.append("\(surface): Calendar menu cycle \(cycle + 1) did not reveal and close a real Day/Week/Month menu (status=\(status), choices=\(choices), closed=\(probe["closed"] ?? false), error=\(probe["error"] ?? "none"))")
+                }
+            }
+            let nav = report["calendarNavigation"] as? [String: Any] ?? [:]
+            let previous = nav["controls"] as? [String: Any] ?? [:]
+            let previousControls = previous["previous"] as? [[String: Any]] ?? []
+            let nextControls = previous["next"] as? [[String: Any]] ?? []
+            print("   Calendar navigation Previous=\(previousControls) Next=\(nextControls)")
+            let hasValid = { (controls: [[String: Any]]) -> Bool in
+                controls.contains { validControl($0) }
+            }
+            if !hasValid(previousControls) || !hasValid(nextControls)
+                || (nav["noOverlap"] as? Bool ?? false) == false {
+                failures.append("\(surface): Calendar previous/next controls failed viewport/hit-test or overlap audit (previous=\(previousControls), next=\(nextControls), overlap=\(nav["noOverlap"] ?? "missing"))")
+            }
         }
         if let named = report["headerHiddenNamed"] as? [String], !named.isEmpty {
             failures.append("\(surface): named controls hidden in the header: " + named.joined(separator: ", "))
@@ -527,7 +732,8 @@ final class DomCheck {
               + "hidden=\(report["hidden"] ?? "?") marked=\(report["marked"] ?? "?") "
               + "rightStrip=\(report["rightStrip"] ?? "?") "
               + "headerRight=\(report["headerRight"] ?? "?") "
-              + "toolbar=\(report["toolbarControls"] ?? "?") error=\(report["error"] ?? "?")")
+              + "gemini=\(report["geminiLauncher"] ?? "?") "
+              + "view=\(report["calendarViewOptions"] ?? "?") error=\(report["error"] ?? "?")")
         if (report["injected"] as? String) != "yes" { failures.append("\(surface): trimming script never ran") }
         if (report["hidden"] as? Int ?? 0) == 0 { failures.append("\(surface): cssom pass hid nothing") }
         let error = (report["error"] as? String) ?? "none"

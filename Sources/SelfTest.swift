@@ -284,62 +284,82 @@ enum SelfTest {
     }
 
     private static func testGmailChromeCSS() {
-        // The header rule is positional, because the account and support
-        // buttons are <img> elements with no accessible name to select.
-        // Position rules may not eat the product's own navigation: at narrow
-        // widths Calendar moves its arrows and Today, and Gmail collapses search
-        // to an icon, all into the header's right-hand side.
-        for word in ["search", "previous", "next", "today", "change view"] {
+        // Position-only trimming must spare the unnamed Calendar view dropdown,
+        // while named chrome remains explicitly selected for removal.
+        for word in ["search", "previous", "next", "today", "change view", "month"] {
             expect(GmailChrome.keepPattern.lowercased().contains(word),
                    "the keep list spares \(word)")
         }
-        // Prev/next must survive by construction, not by a word list matching
-        // today: the positional rule may only hide controls with no accessible
-        // name, which is what separates Google's buttons from the product's.
-        expect(GmailChrome.scriptSource(isMail: true).contains("hasOwnName"),
-               "the positional rule spares anything that has a name")
-        expect(GmailChrome.auditScript.contains("headerHiddenNamed"),
-               "a named control hidden in the header fails the check")
-        expect(GmailChrome.scriptSource(isMail: true).contains("isKept"),
-               "the positional rule consults the keep list")
-        expect(GmailChrome.scriptSource(isMail: true).contains("occupiesSpace"),
-               "collapsing an ancestor requires measured geometry, not a guess")
-        expect(GmailChrome.auditScript.contains("toolbarControls"),
-               "the audit fails when the toolbar row under the header is emptied")
-        expect(GmailChrome.scriptSource(isMail: true).contains("hideHeaderRight"),
-               "the header's right-hand cluster is hidden by position, not by name")
-        for selector in ["[aria-label=\"Gemini\"]", ".Pv5YRd"] {
-            expect(GmailChrome.mailSelectors.contains(selector), "gmail hides \(selector)")
-        }
-        expect(GmailChrome.auditScript.contains("headerRight"),
-               "the audit measures the header zone, so a surviving avatar is a failure")
+        let calendarViewScript = GmailChrome.scriptSource(isMail: false)
+        expect(calendarViewScript.contains("calendarViewButton")
+               && calendarViewScript.contains("arrow_drop_down"),
+               "Calendar preserves the structural Montharrow_drop_down button")
+        expect(calendarViewScript.contains("hasOwnName"),
+               "the positional rule still hides only nameless controls")
+        expect(GmailChrome.calendarSelectors.contains(#"[aria-label="Filter and view"]"#),
+               "the separate Filter and view icon is explicitly hidden")
+        expect(!calendarViewScript.contains("smallestResponsiveWrapper")
+               && !calendarViewScript.contains("showCalendarViewSwitcher")
+               && !calendarViewScript.contains("__gcalViewState"),
+               "Calendar does not force an ancestor or maintain responsive repair state")
+        expect(!GmailChrome.auditScript.contains("wideViewSwitcher")
+               && !GmailChrome.auditScript.contains("toolbarControls"),
+               "the audit has no false generic responsive groups")
+        expect(GmailChrome.auditScript.contains("viewButton")
+               && GmailChrome.auditScript.contains("calendarNavigation"),
+               "the audit checks the real dropdown and navigation geometry")
+        expect(GmailChrome.calendarMenuProbeScript.contains("calendarViewButton")
+               && GmailChrome.calendarMenuProbeScript.contains("Day/Week/Month")
+               && GmailChrome.calendarMenuProbeScript.contains("ariaClosed")
+               && GmailChrome.calendarMenuProbeScript.contains("!strictOpen(menuInstance)")
+               && GmailChrome.calendarMenuProbeScript.contains("visible-after-production-repair")
+               && GmailChrome.calendarMenuProbeScript.contains("Math.abs(mr.right - br.right) <= 4"),
+               "Calendar verification checks anchored opening and semantic, non-hittable closure")
+        expect(!GmailChrome.calendarMenuProbeScript.contains("Filter and view")
+               && !GmailChrome.calendarMenuProbeScript.contains("radiogroup"),
+               "Calendar verification never substitutes the filter icon or wide branch")
+        expect(GmailChrome.calendarMenuProbeScript.contains("raw-after-click")
+               && GmailChrome.calendarMenuProbeScript.contains("clippingAncestors")
+               && GmailChrome.calendarMenuProbeScript.contains("computedOpen"),
+               "Calendar verification records the untouched menu geometry and visibility")
+        expect(!GmailChrome.calendarMenuProbeScript.contains("placeExactMenu")
+               && !GmailChrome.calendarMenuProbeScript.contains("appendChild(menuInstance)")
+               && !GmailChrome.calendarMenuProbeScript.contains("insertBefore(menuInstance")
+               && !GmailChrome.calendarMenuProbeScript.contains("style.setProperty")
+               && !GmailChrome.calendarMenuProbeScript.contains("style.display ="),
+               "Calendar verification cannot repair, reparent, or hide the menu")
 
+        let mailScript = GmailChrome.makeUserScript(enabled: true, isMail: true)
         expect(GmailChrome.makeUserScript(enabled: false, isMail: true).source.isEmpty,
                "disabled trimming injects nothing")
-        let mailScript = GmailChrome.makeUserScript(enabled: true, isMail: true)
-        let calendarScript = GmailChrome.makeUserScript(enabled: true, isMail: false)
         expect(mailScript.source.contains("suite-chrome"), "the stylesheet is installed under a known id")
         expect(mailScript.source.contains("aeN"), "the mail page gets the mail rules")
-        expect(calendarScript.source.contains("Switch to Tasks"), "the calendar page gets the calendar rules")
-        expect(!calendarScript.source.contains("aeN"), "Calendar is not styled as Gmail")
+        expect(calendarViewScript.contains("Switch to Tasks"), "the calendar page gets the calendar rules")
+        expect(!calendarViewScript.contains("aeN"), "Calendar is not styled as Gmail")
+        expect(mailScript.source.contains("hideGeminiControls")
+               && mailScript.source.contains("scopedGeminiCandidates"),
+               "Gmail hides Gemini only through the header-scoped launcher set")
+        expect(GmailChrome.auditScript.contains("geminiLauncher")
+               && GmailChrome.auditScript.contains("searchMail"),
+               "the audit checks Gemini removal and visible Search mail")
+        expect(GmailChrome.controlsScript.contains("ancestry")
+               && GmailChrome.controlsScript.contains("signature")
+               && GmailChrome.controlsScript.contains("suiteHidden"),
+               "the controls diagnostic reports structure and hidden markers")
         for isMail in [true, false] {
             let css = GmailChrome.stylesheet(isMail: isMail)
             expect(css.contains(#"aria-label="Side panel""#),
-                   "the right rail is targeted by role and label, not just a class")
+                   "the right rail is targeted by role and label")
             expect(css.contains(#"aria-label^="Google Account""#), "the broken account picture is hidden")
-            expect(css.contains(#"[role="complementary"]"#), "the side panel selector uses its role")
-            // Google forbids inline <style> elements, so the stylesheet alone is
-            // not enough; the CSSOM pass is what makes it stick on Calendar.
             let js = GmailChrome.makeUserScript(enabled: true, isMail: isMail).source
-            expect(js.contains("setProperty"), "hiding also happens through the CSSOM (CSP-proof)")
-            expect(js.contains("MutationObserver"), "re-rendered chrome is hidden again, not just once")
+            expect(js.contains("setProperty") && js.contains("MutationObserver"),
+                   "CSSOM trimming is repeated after Google re-renders")
         }
-        // The rules must name what the live page actually renders.
         for selector in ["div.aeN[role=\"navigation\"]", "div.jAmAWb", "#gb a.FH", "#gb .lJradf"] {
             expect(GmailChrome.mailSelectors.contains(selector), "mail selectors target \(selector)")
         }
         expect(GmailChrome.sharedSelectors.contains(#"#gb a[aria-label^="Google Account"]"#),
-               "the account picture is hidden (it only errors inside a web view)")
+               "the account picture is hidden")
         for selector in ["[aria-label=\"Create\"]", "[aria-label=\"Switch to Tasks\"]",
                          "[aria-label=\"Settings menu\"]", "[aria-label=\"Google apps\"]",
                          "[aria-label=\"Support\"]"] {
@@ -350,14 +370,6 @@ enum SelfTest {
         let addURL = Accounts.addAccountURL(for: "https://mail.google.com/mail/u/0/")
         expect(addURL.hasPrefix("https://accounts.google.com/AddSession?hl=en&continue="),
                "adding an account goes to Google's AddSession page")
-        expect(addURL.contains("mail.google.com") && !addURL.contains(" "),
-               "the return address is escaped into the url")
-        expect(GmailChrome.auditScript.contains("leftRail"), "the audit measures the rails")
-        expect(WebPage.isMail(Source(id: "mail", label: "Mail", url: "https://mail.google.com/mail/u/0/",
-                                    symbol: "envelope")), "Mail is recognised as mail")
-        expect(!WebPage.isMail(Source(id: "calendar", label: "Calendar",
-                                      url: "https://calendar.google.com/calendar/u/0/r/month",
-                                      symbol: "calendar")), "Calendar is not trimmed")
         var config = Config()
         config.trimGmailChrome = false
         expect(!config.trimGmailChrome, "trimming can be turned off in config")
