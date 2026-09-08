@@ -4,18 +4,17 @@ import Foundation
 ///
 /// `open --args` only reaches a cold start, so the request travels through a small
 /// rendezvous file instead: the CLI writes it, the app reads and deletes it when it
-/// next becomes active. That makes `gcal --mail` work whether or not the app was
+/// next becomes active. That makes `gsuite --mail` work whether or not the app was
 /// already open, which `--args` alone could never do.
 enum Reveal {
     private static var file: URL = FileManager.default
         .homeDirectoryForCurrentUser
-        .appendingPathComponent(".config/gcal-app/reveal", isDirectory: false)
-        ?? URL(fileURLWithPath: "/tmp/gcal-reveal")
+        .appendingPathComponent(".config/google-suite/reveal", isDirectory: false)
 
     /// Test seam: keep the CLI handshake out of the real config directory.
     static func use(path: URL?) {
         file = path ?? FileManager.default.temporaryDirectory
-            .appendingPathComponent("gcal-reveal-\(UUID().uuidString)")
+            .appendingPathComponent("google-suite-reveal-\(UUID().uuidString)")
     }
 
     static func request(_ id: String) {

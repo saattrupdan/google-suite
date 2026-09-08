@@ -1,4 +1,4 @@
-# gcal-app — "Google Suite" for Mac
+# google-suite — Google Mail and Calendar for Mac
 
 Two Google surfaces in one small native window: **Mail** and **Calendar**, a left rail
 of icons, and nothing else. Built from `swiftc` and `WKWebView` — no Electron, no Xcode
@@ -20,9 +20,9 @@ own.
 ## Install
 
 ```sh
-cd ~/gitsky/gcal-app
+cd ~/gitsky/google-suite
 ./build.sh && ./install.sh
-open "/Applications/Google Suite.app"     # or: bin/gcal
+open "/Applications/Google Suite.app"     # or: bin/gsuite
 ```
 
 Sign in on first launch. Those cookies belong to this app
@@ -115,7 +115,7 @@ click it. Account switching lives in the **Account** menu instead:
   the window, and the new session lands in the next `u/N` slot.
 * **Switch Account** (⌥⌘1…9) lists the addresses Gmail actually reports —
   `MailWatcher` learns which slot is which mailbox from the Atom feeds, so the
-  menu says `dan@syv.ai` rather than "Account 1".
+  menu says `you@example.com` rather than "Account 1".
 * **Apply Current Account to Both Sources** keeps mail and calendar on the same
   account.
 
@@ -184,7 +184,8 @@ an account in Apple's Mail app.
 
 ## Configuration
 
-`~/.config/gcal-app/config.json`, created on first launch:
+`~/.config/google-suite/config.json`, created on first launch (settings from the
+old `~/.config/gcal-app/` are picked up automatically once):
 
 ```json
 {
@@ -293,7 +294,7 @@ Sources/Menus.swift         the menu bar
 Sources/Notifier.swift      in-page Notification → native notification bridge
 Sources/LaunchItems.swift   SMAppService login item
 Sources/SelfTest.swift      offline checks
-build.sh install.sh smoke.sh bin/gcal
+build.sh install.sh smoke.sh bin/gsuite
 tools/make-icon.swift       generates Resources/AppIcon.icns from tools/google-g.png
 ```
 

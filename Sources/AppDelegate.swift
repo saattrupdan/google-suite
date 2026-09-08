@@ -91,7 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         NSApp.applicationIconImage = icon
     }
 
-    /// Acts on a `gcal --mail` / `--calendar` request — on a cold start, and on a
+    /// Acts on a `gsuite --mail` / `--calendar` request — on a cold start, and on a
     /// re-activation of an instance that is already running (which is the case
     /// `open --args` cannot reach).
     private func applyRevealRequest() {

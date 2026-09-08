@@ -127,15 +127,33 @@ struct Config: Codable {
 
     // MARK: - Location
 
-    /// `~/.config/gcal-app/config.json`
-    static var fileURL: URL {
+    /// `~/.config/google-suite/config.json`
+    static var fileURL: URL { configDirectory.appendingPathComponent("config.json") }
+
+    static var configDirectory: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/gcal-app/config.json")
+            .appendingPathComponent(".config/google-suite", isDirectory: true)
+    }
+
+    /// Where the settings lived before the project stopped being "just gcal".
+    private static var legacyDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/gcal-app", isDirectory: true)
+    }
+
+    /// Picks up settings from the old location, so the rename is invisible from
+    /// the outside. Called once, on load.
+    private static func adoptLegacyFile() {
+        let legacy = legacyDirectory.appendingPathComponent("config.json")
+        guard !FileManager.default.fileExists(atPath: fileURL.path),
+              FileManager.default.fileExists(atPath: legacy.path) else { return }
+        try? FileManager.default.createDirectory(at: configDirectory, withIntermediateDirectories: true)
+        try? FileManager.default.copyItem(at: legacy, to: fileURL)
     }
 
     /// Reads the config, writing a default file first if none exists.
     static func load(createIfMissing: Bool = true, at url: URL? = nil) -> Config {
-        let location = url ?? fileURL
+        let location = url ?? { adoptLegacyFile(); return fileURL }()
         guard let data = FileManager.default.contents(atPath: location.path) else {
             if createIfMissing { writeDefaults(to: location) }
             return Config()
@@ -144,7 +162,7 @@ struct Config: Codable {
             return try JSONDecoder().decode(Config.self, from: data)
         } catch {
             FileHandle.standardError.write(
-                "gcal: ignoring unreadable config at \(location.path): \(error)\n".data(using: .utf8)!)
+                "google-suite: ignoring unreadable config at \(location.path): \(error)\n".data(using: .utf8)!)
             return Config()
         }
     }

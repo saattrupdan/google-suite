@@ -155,7 +155,7 @@ final class WebPage: NSViewController, WKNavigationDelegate, WKUIDelegate, WKDow
 
     func load(_ string: String) {
         guard let url = URL(string: string) else {
-            FileHandle.standardError.write("gcal: bad URL in config: \(string)\n".data(using: .utf8)!)
+            FileHandle.standardError.write("google-suite: bad URL in config: \(string)\n".data(using: .utf8)!)
             return
         }
         webView.load(URLRequest(url: url))

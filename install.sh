@@ -21,4 +21,4 @@ rm -rf "$HOME/Library/Saved Application State/com.saattrupdan.google-suite.saved
 [[ -x "$LSREGISTER" ]] && "$LSREGISTER" -f "$DEST"
 
 echo "installed: $DEST"
-echo "launch:    open -a '$APP_NAME'   (or: bin/gcal)"
+echo "launch:    open -a '$APP_NAME'   (or: bin/gsuite)"

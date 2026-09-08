@@ -105,9 +105,9 @@ enum GmailChrome {
           // node because assigning to `textContent` is a Trusted Types sink on
           // Google's pages and throws.
           const addSheet = () => {
-            if (!document.head || document.getElementById('gcal-chrome')) return;
+            if (!document.head || document.getElementById('suite-chrome')) return;
             const style = document.createElement('style');
-            style.id = 'gcal-chrome';
+            style.id = 'suite-chrome';
             style.appendChild(document.createTextNode(styleCSS));
             document.head.appendChild(style);
           };
@@ -115,9 +115,9 @@ enum GmailChrome {
           // The path that actually works on Google's strict CSP: assigning
           // through the CSSOM is not an inline style, so it is not blocked.
           const hide = (el) => {
-            if (el.dataset.gcalHidden === '1') return;
+            if (el.dataset.suiteHidden === '1') return;
             try {
-              el.dataset.gcalHidden = '1';
+              el.dataset.suiteHidden = '1';
               el.style.setProperty('display', 'none', 'important');
               window.__gcalChromeHidden = (window.__gcalChromeHidden || 0) + 1;
             } catch (e) { window.__gcalChromeError = String(e); }
@@ -134,7 +134,7 @@ enum GmailChrome {
               if (box.width > 160) break;
               let anyVisible = false;
               for (const child of parent.children) {
-                if (child.dataset.gcalHidden === '1') continue;
+                if (child.dataset.suiteHidden === '1') continue;
                 const b = child.getBoundingClientRect();
                 if (b.width > 1 && b.height > 1) { anyVisible = true; break; }
               }
@@ -149,7 +149,7 @@ enum GmailChrome {
               let nodes;
               try { nodes = document.querySelectorAll(sel); } catch (e) { continue; }
               for (const el of nodes) {
-                if (el.dataset.gcalHidden === '1') continue;
+                if (el.dataset.suiteHidden === '1') continue;
                 hide(el);
                 collapse(el);
               }
@@ -176,7 +176,7 @@ enum GmailChrome {
             }
             const limit = bar.getBoundingClientRect().right - HEADER_ZONE;
             for (const el of bar.querySelectorAll('a, button, [role="button"], img')) {
-              if (el.dataset.gcalHidden === '1' || keep.has(el)) continue;
+              if (el.dataset.suiteHidden === '1' || keep.has(el)) continue;
               const r = el.getBoundingClientRect();
               if (r.width < 8 || r.height < 8 || r.top > 56 || r.x < limit) continue;
               const target = el.closest('a, button, [role="button"]') || el;
@@ -270,8 +270,8 @@ enum GmailChrome {
         }
         report[name] = {matched, visible, widest, mustHide: group.mustHide, optional: group.optional};
       }
-      report.sheet = document.getElementById('gcal-chrome') ? 'installed' : 'not installed';
-      report.marked = document.querySelectorAll('[data-gcal-hidden]').length;
+      report.sheet = document.getElementById('suite-chrome') ? 'installed' : 'not installed';
+      report.marked = document.querySelectorAll('[data-suite-hidden]').length;
       report.injected = window.__gcalChromeLoaded ? 'yes' : 'NO SCRIPT';
       report.runs = window.__gcalChromeRuns || 0;
       report.hidden = window.__gcalChromeHidden || 0;
@@ -301,7 +301,7 @@ enum GmailChrome {
         const limit = bar.getBoundingClientRect().right - 360;
         const seen = new Set();
         for (const el of bar.querySelectorAll('a, button, [role="button"], img')) {
-          if (keep.has(el) || el.dataset.gcalHidden === '1') continue;
+          if (keep.has(el) || el.dataset.suiteHidden === '1') continue;
           const target = el.closest('a, button, [role="button"]') || el;
           if (seen.has(target)) continue;
           const r = target.getBoundingClientRect();

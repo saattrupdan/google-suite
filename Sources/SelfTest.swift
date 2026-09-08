@@ -71,7 +71,7 @@ enum SelfTest {
 
     private static func testConfigIsLenient() {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("gcal-selftest-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("google-suite-selftest-\(UUID().uuidString)", isDirectory: true)
         let file = dir.appendingPathComponent("config.json")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
@@ -157,7 +157,7 @@ enum SelfTest {
         expect(WebPage.isBlank(URL(string: "about:blank")!), "about:blank is blank")
         expect(WebPage.isBlankString("about:blank"), "blank recognised in string form")
         expect(!WebPage.isBlank(URL(string: "https://accounts.google.com/v3/signin")!), "a real URL is not blank")
-        expectEqual(WebPage.unreadCount(inTitle: "Inbox (3) - dan@syv.ai - Mail") ?? -1, 3, "unread from title")
+        expectEqual(WebPage.unreadCount(inTitle: "Inbox (3) - you@example.com - Mail") ?? -1, 3, "unread from title")
         expectEqual(WebPage.unreadCount(inTitle: "(12) Inbox - Mail") ?? -1, 12, "unread in bracket form")
         expect(WebPage.unreadCount(inTitle: "Inbox - Mail") == nil, "no unread count means no badge")
         expect(WebPage.unreadCount(inTitle: nil) == nil, "a nil title parses to nothing")
@@ -298,7 +298,7 @@ enum SelfTest {
                "disabled trimming injects nothing")
         let mailScript = GmailChrome.makeUserScript(enabled: true, isMail: true)
         let calendarScript = GmailChrome.makeUserScript(enabled: true, isMail: false)
-        expect(mailScript.source.contains("gcal-chrome"), "the stylesheet is installed under a known id")
+        expect(mailScript.source.contains("suite-chrome"), "the stylesheet is installed under a known id")
         expect(mailScript.source.contains("aeN"), "the mail page gets the mail rules")
         expect(calendarScript.source.contains("Switch to Tasks"), "the calendar page gets the calendar rules")
         expect(!calendarScript.source.contains("aeN"), "Calendar is not styled as Gmail")

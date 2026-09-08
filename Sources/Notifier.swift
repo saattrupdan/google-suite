@@ -19,7 +19,7 @@ import WebKit
 /// README rather than pretending otherwise.
 enum Notifier {
     /// Name of the script message handler the shim posts to.
-    static let handlerName = "gcalNotify"
+    static let handlerName = "suiteNotify"
 
     static let installScript = """
     (() => {
