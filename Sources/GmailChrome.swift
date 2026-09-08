@@ -138,27 +138,110 @@ enum GmailChrome {
       const candidateName = (el) => ((el.getAttribute &&
         (el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('data-tooltip') || ''))
         + ' ' + (el.textContent || '')).trim();
+      const subtreeText = (el) => {
+        if (!el) return '';
+        const own = candidateName(el);
+        const descendants = el.querySelectorAll ? Array.from(el.querySelectorAll('*'))
+          .map(candidateName).join(' ') : '';
+        return (own + ' ' + descendants).replace(/\\s+/g, ' ').trim();
+      };
+      const geminiIconEvidence = (el) => {
+        if (!el) return false;
+        const classed = (el.matches && el.matches('.MxSLJe,.Pv5YRd'))
+          || !!(el.querySelector && el.querySelector('.MxSLJe,.Pv5YRd'));
+        if (classed) return true;
+        const svg = el.tagName === 'SVG' ? el : (el.querySelector && el.querySelector('svg'));
+        const path = svg && svg.querySelector && svg.querySelector('path');
+        return !!(path && /^M480-80q-6/i.test(path.getAttribute('d') || ''));
+      };
+      const geminiEvidence = (el) => /gemini|studio unavailable/i.test(subtreeText(el))
+        || geminiIconEvidence(el);
+      const hiddenGeminiAncestor = (el) => {
+        for (let node = el; node; node = node.parentElement) {
+          if (node.dataset && node.dataset.suiteHidden === '1') return true;
+        }
+        return false;
+      };
+      const smallVisual = (el) => {
+        if (!el || !el.getBoundingClientRect) return false;
+        const r = el.getBoundingClientRect();
+        // A marked launcher remains a valid target on later MutationObserver
+        // passes after display:none has made all descendant boxes zero-sized.
+        if (hiddenGeminiAncestor(el) && r.width < 1 && r.height < 1) return true;
+        return r.width > 1 && r.height > 1 && r.width <= 80 && r.height <= 80;
+      };
+      const hasInteractive = (el) => !!(el.matches && el.matches('a,button,[role="button"],[role="menuitem"]'))
+        || !!(el.querySelector && el.querySelector('a,button,[role="button"],[role="menuitem"]'));
+      const hasVisualChild = (el) => el && el.children && Array.from(el.children)
+        .filter(child => {
+          const r = child.getBoundingClientRect();
+          return r.width > 1 && r.height > 1;
+        }).length >= 2;
+      // The Gemini release that motivated this helper put the real button and
+      // the decorative SVG in sibling branches of a 40x40 wrapper. Promote to
+      // that visual wrapper, but not to its broad header parent. A normal
+      // named/icon button remains its own target when it has no wrapper shape.
+      const visualLauncherAncestor = (el) => {
+        if (!hasInteractive(el)) return false;
+        // A Google header cluster can itself be only 40px high while holding
+        // Settings, account, status, and Gemini as sibling controls. A visual
+        // launcher wrapper has one interactive descendant; more than one is a
+        // cluster boundary even when its own box is deceptively small.
+        const controls = el.querySelectorAll ? Array.from(el.querySelectorAll(
+          'a,button,[role="button"],[role="menuitem"]')) : [];
+        if (controls.length > 1) return false;
+        if (controls.some(control => {
+          const name = candidateName(control);
+          return name && !/gemini|studio unavailable/i.test(name);
+        })) return false;
+        return hasVisualChild(el) || !!(el.querySelector && el.querySelector('svg'));
+      };
+      const geminiLauncherTarget = (candidate) => {
+        const header = headerOf(candidate);
+        if (!header) return null;
+        let target = controlTarget(candidate);
+        if (!target || !header.contains(target)) target = candidate;
+        let promoted = smallVisual(target) ? target : null;
+        for (let node = target.parentElement; node && node !== header; node = node.parentElement) {
+          if (!header.contains(node) || !geminiEvidence(node)) break;
+          // At documentEnd Google's launcher can still report a zero box. This
+          // measured class pair is only a fallback for that early-layout case;
+          // normal releases use the structural visualLauncherAncestor test.
+          const knownVisualWrapper = node.matches && node.matches('.Zmxtcf.e5IPTd');
+          if (!smallVisual(node) && !knownVisualWrapper)
+            break; // broad Google header cluster boundary
+          if (visualLauncherAncestor(node) || knownVisualWrapper) promoted = node;
+        }
+        return promoted || target;
+      };
       const geminiCandidate = (el) => {
-        const target = controlTarget(el), name = candidateName(target);
-        if (!headerChrome(target)) return false;
-        if (/gemini|studio unavailable/i.test(name)) return true;
-        // Gmail has also shipped this launcher as an icon-only control. The
-        // class may be on the interactive target or on an icon nested inside
-        // it; inspect the original candidate before promoting it to a button.
-        const classedIcon = (el.matches && el.matches('.MxSLJe,.Pv5YRd'))
-          || !!(el.querySelector && el.querySelector('.MxSLJe,.Pv5YRd'))
-          || (target.matches && target.matches('.MxSLJe,.Pv5YRd'));
-        return !!classedIcon;
+        const target = controlTarget(el);
+        if (!target || !headerOf(target)) return false;
+        // Geometry is used only to reject arbitrary header text. Marked nodes
+        // are retained after our own hide pass so the audit inspects the same
+        // promoted target rather than its now-zero-sized child button.
+        if (!headerChrome(target) && !hiddenGeminiAncestor(el)) return false;
+        return geminiEvidence(el) || geminiEvidence(target);
       };
       const scopedGeminiCandidates = () => {
         const header = document.querySelector('#gb, header[role="banner"]');
         if (!header) return [];
         const nodes = header.querySelectorAll('a,button,[role="button"],[role="menuitem"],'
-          + '[aria-label],[data-tooltip],.MxSLJe,.Pv5YRd');
+          + '[aria-label],[data-tooltip],.MxSLJe,.Pv5YRd,svg');
         const out = [], seen = new Set();
         for (const node of nodes) {
-          const target = controlTarget(node);
-          if (geminiCandidate(target) && !seen.has(target)) { seen.add(target); out.push(target); }
+          if (!geminiCandidate(node)) continue;
+          const target = geminiLauncherTarget(node);
+          if (target && !seen.has(target)) { seen.add(target); out.push(target); }
+        }
+        // This class pair is a release-specific fallback for the decorative
+        // wrapper when Google has already collapsed its nested button to zero;
+        // the structural pass above remains the normal path and is what keeps
+        // this resilient to future class renames.
+        for (const node of header.querySelectorAll('.Zmxtcf.e5IPTd')) {
+          if (!geminiEvidence(node)) continue;
+          const target = geminiLauncherTarget(node) || node;
+          if (!seen.has(target)) { seen.add(target); out.push(target); }
         }
         return out;
       };
@@ -232,7 +315,7 @@ enum GmailChrome {
         return choices;
       };
       return {visible, pointVisible, laidOut, viewportIntersection, hitTested, headerChrome, geminiCandidate,
-        scopedGeminiCandidates, calendarViewButton, normalizeText, remember, restore,
+        geminiLauncherTarget, scopedGeminiCandidates, calendarViewButton, normalizeText, remember, restore,
         calendarChoicesValid, menuVisible, menuChoices};
     })();
     """#

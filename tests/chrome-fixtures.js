@@ -18,38 +18,38 @@ class Element {
   constructor(tag, attrs = {}, rect = [0, 0, 0, 0], style = {}) {
     this.tagName = tag.toUpperCase(); this.attrs = {...attrs}; this.rect = rect;
     this.style = new Style(style); this.children = []; this.parentElement = null;
-    this.textContent = attrs.text || '';
+    this.dataset = {}; this.textContent = attrs.text || '';
   }
   append(...children) { for (const child of children) { child.parentElement = this; this.children.push(child); } return this; }
   getBoundingClientRect() { const [x, y, width, height] = this.rect; return {x, y, width, height, left: x, top: y, right: x + width, bottom: y + height}; }
   getAttribute(k) { return this.attrs[k] || ''; }
   contains(node) { for (let n = node; n; n = n.parentElement) if (n === this) return true; return false; }
   matches(selector) {
-    if (selector === '.MxSLJe,.Pv5YRd') return /(^|\s)(MxSLJe|Pv5YRd)(\s|$)/.test(this.attrs.class || '');
-    return selector.split(',').some(s => s.trim() === this.tagName.toLowerCase());
+    return selector.split(',').some(raw => {
+      const s = raw.trim();
+      if (!s || s.includes(' ') || s.includes('>')) return false;
+      const tag = s.match(/^[a-z*]+/i);
+      if (tag && tag[0] !== '*' && tag[0].toUpperCase() !== this.tagName) return false;
+      const id = s.match(/#([\w-]+)/);
+      if (id && id[1] !== (this.attrs.id || '')) return false;
+      for (const cls of s.matchAll(/\.([\w-]+)/g))
+        if (!(this.attrs.class || '').split(/\s+/).includes(cls[1])) return false;
+      for (const attr of s.matchAll(/\[([\w-]+)(?:([~|^$*]?=)["']?([^\]"']*)["']?)?\]/g)) {
+        const value = this.attrs[attr[1]] || '';
+        if (!attr[2] ? !(attr[1] in this.attrs) : attr[2] === '=' && value !== attr[3]) return false;
+      }
+      return true;
+    });
   }
   closest(selector) {
-    for (let node = this; node; node = node.parentElement) {
-      if (selector.includes('#gb') && node.attrs.id === 'gb') return node;
-      if (selector.includes('header[role="banner"]') && node.tagName === 'HEADER' && node.attrs.role === 'banner') return node;
-      if (node.matches(selector)) return node;
-    }
+    for (let node = this; node; node = node.parentElement) if (node.matches(selector)) return node;
     return null;
   }
   querySelectorAll(selector) {
     const result = [];
-    const wantsMenu = selector.includes('[role="menuitem"]');
-    const wantsRadio = selector.includes('[role="radio"]');
-    const wantsOption = selector.includes('[role="option"]');
-    const wantsButton = selector.includes('button');
-    const wantsGeminiClass = selector.includes('.MxSLJe') || selector.includes('.Pv5YRd');
     const visit = node => {
       for (const child of node.children) {
-        if ((wantsMenu && child.attrs.role === 'menuitem') ||
-            (wantsRadio && child.attrs.role === 'radio') ||
-            (wantsOption && child.attrs.role === 'option') ||
-            (wantsButton && child.tagName === 'BUTTON') ||
-            (wantsGeminiClass && /MxSLJe|Pv5YRd/.test(child.attrs.class || ''))) result.push(child);
+        if (child.matches(selector)) result.push(child);
         visit(child);
       }
     };
@@ -64,10 +64,21 @@ const icon = new Element('div', {class: 'MxSLJe'}, [560, 8, 40, 40]);
 const nestedButton = new Element('button', {}, [430, 8, 40, 40]);
 const nestedIcon = new Element('span', {class: 'Pv5YRd'}, [430, 8, 40, 40]);
 nestedButton.append(nestedIcon);
+// A release-shaped launcher: the named button and decorative SVG are siblings
+// inside the small visual wrapper, which itself sits in a broad header cluster.
+const launcherCluster = new Element('div', {class: 'header-cluster'}, [480, 0, 137, 64]);
+const launcherWrapper = new Element('div', {class: 'launcher-wrapper'}, [500, 8, 40, 40]);
+const launcherSpan = new Element('span', {}, [500, 8, 40, 40]);
+const launcherButton = new Element('button', {'aria-label': 'Ask Gemini'}, [500, 8, 40, 40]);
+const launcherSvg = new Element('svg', {viewBox: '0 0 960 960'}, [500, 8, 40, 40]);
+launcherSvg.append(new Element('path', {d: 'M480-80q-6-6-6-14'}, [500, 8, 40, 40]));
+launcherSpan.append(launcherButton);
+launcherWrapper.append(launcherSpan, new Element('div', {class: 'ekylFf'}, [500, 8, 40, 40]), launcherSvg);
+launcherCluster.append(launcherWrapper);
 const viewButton = new Element('button', {text: 'Montharrow_drop_down'}, [300, 8, 120, 40]);
 const namelessChrome = new Element('button', {}, [580, 8, 30, 40]);
 const calendarFilter = new Element('button', {'aria-label': 'Filter and view'}, [270, 8, 24, 40]);
-header.append(ask, nestedButton, icon, calendarFilter, viewButton, namelessChrome);
+header.append(ask, nestedButton, icon, launcherCluster, calendarFilter, viewButton, namelessChrome);
 const message = new Element('div', {text: 'An email mentioning Gemini must remain content.'}, [10, 100, 400, 100]);
 body.append(header, message);
 const menu = new Element('ul', {role: 'menu'}, [100, 140, 200, 160]);
@@ -101,6 +112,7 @@ const fakeDocument = {
     const r = el.getBoundingClientRect();
     return !hidden(el) && r.width > 0 && r.height > 0 && x >= r.left && x < r.right && y >= r.top && y < r.bottom;
   }) || null,
+  addEventListener: () => {},
 };
 const context = {
   window: {innerWidth: 1000, innerHeight: 800}, document: fakeDocument,
@@ -116,6 +128,19 @@ check(h.scopedGeminiCandidates().includes(ask), 'named header launcher not ident
 check(!h.scopedGeminiCandidates().includes(message), 'message content was treated as a launcher');
 check(h.scopedGeminiCandidates().includes(icon), 'icon-only scoped launcher not identified');
 check(h.scopedGeminiCandidates().includes(nestedButton), 'nested icon did not select its button');
+const promoted = h.scopedGeminiCandidates();
+check(promoted.includes(launcherWrapper), 'decorative Gemini wrapper was not promoted');
+check(!promoted.includes(launcherButton), 'wrapper promotion left only the nested button selected');
+check(!promoted.includes(launcherCluster), 'promotion crossed into the broad header cluster');
+// Production hides the returned targets, not merely the nested control. This
+// also exercises the marked-zero-size path used by later mutation passes.
+for (const target of promoted) {
+  target.dataset.suiteHidden = '1';
+  target.style.setProperty('display', 'none', 'important');
+}
+check(hidden(launcherWrapper), 'production candidate set did not hide the wrapper');
+check(launcherWrapper.dataset.suiteHidden === '1', 'wrapper was not marked hidden');
+check(!hidden(message), 'hiding launchers touched message content');
 // The positional rule has one narrow exception: the actual unnamed #gb
 // Montharrow_drop_down button. Arbitrary nameless chrome and the separate
 // Filter and view icon are not substitutes.
@@ -143,4 +168,4 @@ for (let cycle = 0; cycle < 2; cycle++) {
   offscreenMenu.rect = [100, 900, 200, 160];
 }
 check(repeatedCycleEligible, 'retained off-screen menu failed on the second open cycle');
-console.log('CHROME_FIXTURES ok (17 checks)');
+console.log('CHROME_FIXTURES ok (23 checks)');

@@ -337,8 +337,10 @@ enum SelfTest {
         expect(calendarViewScript.contains("Switch to Tasks"), "the calendar page gets the calendar rules")
         expect(!calendarViewScript.contains("aeN"), "Calendar is not styled as Gmail")
         expect(mailScript.source.contains("hideGeminiControls")
-               && mailScript.source.contains("scopedGeminiCandidates"),
-               "Gmail hides Gemini only through the header-scoped launcher set")
+               && mailScript.source.contains("scopedGeminiCandidates")
+               && mailScript.source.contains("geminiLauncherTarget")
+               && mailScript.source.contains("M480-80q-6"),
+               "Gmail promotes the full visual Gemini launcher within the header")
         expect(GmailChrome.auditScript.contains("geminiLauncher")
                && GmailChrome.auditScript.contains("searchMail"),
                "the audit checks Gemini removal and visible Search mail")
