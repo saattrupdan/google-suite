@@ -130,6 +130,16 @@ final class RootController: NSViewController, NSMenuItemValidation {
 
     // Layout read-outs for --popupprobe.
     var sidebarFrame: NSRect { sidebar.frame }
+    var sidebarIsHidden: Bool { sidebar.isHidden }
+    var sidebarSelectedID: String? {
+        sidebar.items.first(where: { $0.button.state == .on })?.source.id
+    }
+    func sidebarBadgeText(for id: String) -> String? {
+        guard let item = sidebar.items.first(where: { $0.source.id == id }), !item.badge.isHidden else {
+            return nil
+        }
+        return item.badge.stringValue
+    }
     var contentFrame: NSRect { content.frame }
     var dividerFrame: NSRect { divider.frame }
 
@@ -238,9 +248,14 @@ final class RootController: NSViewController, NSMenuItemValidation {
     /// this hierarchy cannot supply — see PopupPanel.
     private func relayout() {
         let bounds = view.bounds
-        sidebar.frame = NSRect(x: 0, y: 0, width: Sidebar.width, height: bounds.height)
-        content.frame = NSRect(x: Sidebar.width, y: 0,
-                               width: max(0, bounds.width - Sidebar.width), height: bounds.height)
+        let railVisible = layout == .single
+        sidebar.isHidden = !railVisible
+        sidebar.frame = NSRect(x: 0, y: 0,
+                                width: railVisible ? Sidebar.width : 0,
+                                height: bounds.height)
+        let contentX = railVisible ? Sidebar.width : 0
+        content.frame = NSRect(x: contentX, y: 0,
+                               width: max(0, bounds.width - contentX), height: bounds.height)
 
         switch layout {
         case .single:
@@ -249,9 +264,15 @@ final class RootController: NSViewController, NSMenuItemValidation {
                 page.view.frame = content.bounds
                 page.view.isHidden = page.source.id != selectedID
             }
+            // The split rail deliberately styles both icons as shown. Restore
+            // the actual selection as soon as the rail comes back; badge state
+            // was retained by Sidebar while it was hidden.
             sidebar.setSelected(id: selectedID)
+            sidebar.layoutSubtreeIfNeeded()
         case .split:
             divider.isHidden = false
+            // Content now owns the whole window: the ratio and drag coordinate
+            // are both based on the reclaimed width, not on a hidden 56pt rail.
             let room = max(0, content.bounds.width - Self.dividerWidth)
             let first = max(0, room * splitRatio)
             pagesByOrder.enumerated().forEach { index, page in
@@ -265,6 +286,8 @@ final class RootController: NSViewController, NSMenuItemValidation {
                                    width: Self.dividerHitWidth, height: content.bounds.height)
             dividerLine?.frame = NSRect(x: (Self.dividerHitWidth - Self.dividerWidth) / 2, y: 0,
                                         width: Self.dividerWidth, height: content.bounds.height)
+            // Keep the last single-page selection in memory without painting a
+            // selected rail that is not currently visible.
             sidebar.setShown(ids: Set(pagesByOrder.map { $0.source.id }))
         }
     }
@@ -398,8 +421,16 @@ final class RootController: NSViewController, NSMenuItemValidation {
     func layoutSummary() -> String {
         let attached = pagesByOrder.filter { $0.view.superview != nil }.count
         let visible = pagesByOrder.filter { !$0.view.isHidden }.count
-        let railWidth = sidebar.frame.width
-        return "pagesAttached=\(attached)/\(pagesByOrder.count) visible=\(visible) rail=\(Int(railWidth)) popups=\(popups.count)"
+        let railWidth = Int(sidebar.frame.width.rounded())
+        let contentX = Int(content.frame.minX.rounded())
+        let contentWidth = Int(content.frame.width.rounded())
+        let fullWidth = abs(content.frame.width - view.bounds.width) < 0.5
+        let divider = self.divider.isHidden ? "hidden" : "x\(Int(self.divider.frame.midX.rounded()))/\(Int(self.divider.frame.width.rounded()))"
+        return "layout=\(layout.rawValue) selected=\(selectedID) ratio=\(splitRatio) "
+            + "pagesAttached=\(attached)/\(pagesByOrder.count) visible=\(visible) "
+            + "rail=\(railWidth) railHidden=\(sidebar.isHidden) "
+            + "contentX=\(contentX) contentWidth=\(contentWidth) fullWidth=\(fullWidth) "
+            + "divider=\(divider) popups=\(popups.count)"
     }
 }
 

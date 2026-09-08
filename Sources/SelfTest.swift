@@ -228,25 +228,51 @@ enum SelfTest {
         root.view.frame = NSRect(x: 0, y: 0, width: 1280, height: 800)
         root.view.layoutSubtreeIfNeeded()
         expect(root.pagesByOrder[1].view.isHidden, "single view hides the other surface")
+        expectEqual(Int(root.sidebarFrame.width), 56, "single layout keeps the 56pt rail")
+        expectEqual(Int(root.contentFrame.minX), 56, "single content starts after the rail")
+        expectEqual(Int(root.contentFrame.width), 1224, "single content leaves room for the rail")
+        expect(!root.sidebarIsHidden && root.sidebarSelectedID == "mail",
+               "single layout shows the rail with Mail selected")
 
+        root.setBadge(7, for: "mail")
         root.layout = .split
         let mail = root.pagesByOrder[0].view.frame
         let calendar = root.pagesByOrder[1].view.frame
+        expect(root.sidebarIsHidden && root.sidebarFrame.width == 0,
+               "split hides the rail and gives it a zero-width frame")
+        expectEqual(Int(root.contentFrame.minX), 0, "split content starts at the window edge")
+        expectEqual(Int(root.contentFrame.width), 1280, "split content reclaims the full window width")
         expect(!root.pagesByOrder[0].view.isHidden && !root.pagesByOrder[1].view.isHidden,
                "split view shows both surfaces")
         expect(abs(mail.width - calendar.width) < 2 && calendar.minX >= mail.maxX,
-               "split view gives each surface half the width (\(mail) / \(calendar))")
+               "split view gives each surface half the full width (\(mail) / \(calendar))")
         expect(mail.height > 600 && calendar.height > 600, "split surfaces fill the height")
         expect(!root.dividerFrame.isNull && root.dividerFrame.height > 600,
                "the divider spans the height")
+        expectEqual(root.sidebarBadgeText(for: "mail"), "7", "badges keep updating while the rail is hidden")
+        let splitSummary = root.layoutSummary()
+        expect(splitSummary.contains("layout=split") && splitSummary.contains("rail=0 railHidden=true")
+               && splitSummary.contains("contentX=0 contentWidth=1280 fullWidth=true")
+               && splitSummary.contains("visible=2"),
+               "split layout summary reports reclaimed geometry and both pages")
 
+        // Selecting in split view must not hide the other half; the selection
+        // is restored when the rail and single-page presentation return.
+        root.select(id: "calendar")
+        expect(!root.pagesByOrder[0].view.isHidden && !root.pagesByOrder[1].view.isHidden,
+               "selecting one surface keeps both visible")
         root.layout = .single
-        expect(root.pagesByOrder[1].view.isHidden, "going back to one surface hides Calendar")
-
-        // Selecting in split view must not hide the other half.
-        root.layout = .split
-        root.select(id: "mail")
-        expect(!root.pagesByOrder[1].view.isHidden, "selecting one surface keeps both visible")
+        expect(root.pagesByOrder[0].view.isHidden && !root.pagesByOrder[1].view.isHidden,
+               "going back to one surface shows only the selected Calendar")
+        expect(!root.sidebarIsHidden && root.sidebarFrame.width == 56
+               && root.contentFrame.minX == 56 && root.sidebarSelectedID == "calendar",
+               "going back restores the rail, offset, and selected state")
+        expectEqual(root.sidebarBadgeText(for: "mail"), "7", "the badge is correct when the rail returns")
+        let singleSummary = root.layoutSummary()
+        expect(singleSummary.contains("layout=single") && singleSummary.contains("rail=56 railHidden=false")
+               && singleSummary.contains("contentX=56") && singleSummary.contains("visible=1")
+               && singleSummary.contains("selected=calendar"),
+               "single layout summary reports the restored rail and selection")
     }
 
     /// Links are for the browser; only the two surfaces and sign-in belong in
@@ -259,9 +285,10 @@ enum SelfTest {
         root.splitRatio = 0.35
         let mail = root.pagesByOrder[0].view.frame
         let calendar = root.pagesByOrder[1].view.frame
-        expect(abs(mail.width - (1144 * 0.35)) < 3, "the ratio sets Mail's width (\(mail.width))")
-        expect(abs(calendar.maxX - 1144) < 2, "Calendar still ends at the window edge (\(calendar.maxX))")
-        expect(calendar.minX > mail.maxX, "no overlap between the two surfaces")
+        let room = 1200 - RootController.dividerWidth
+        expect(abs(mail.width - (room * 0.35)) < 3, "the ratio uses reclaimed full width (\(mail.width))")
+        expect(abs(calendar.maxX - room) < 2, "Calendar ends at the full window edge (\(calendar.maxX))")
+        expect(calendar.minX > mail.maxX, "no overlap between the surfaces")
 
         root.splitRatio = 0.01
         expect(RootController.splitLimits.contains(root.splitRatio),
@@ -279,8 +306,8 @@ enum SelfTest {
                "the middle of the strip takes the mouse")
         expect(!root.dividerHitTest(CGPoint(x: divider.minX - 40, y: divider.midY)),
                "clicks well away from the seam go to the page, not the divider")
-        expect(abs(divider.midX - (root.contentFrame.midX - 28)) < 3 || abs(divider.midX - 572) < 3,
-               "the divider sits between the two surfaces (\(divider))")
+        expect(abs(divider.midX - root.contentFrame.midX) < 3,
+               "the divider sits halfway across reclaimed content (\(divider))")
     }
 
     private static func testGmailChromeCSS() {

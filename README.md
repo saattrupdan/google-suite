@@ -278,13 +278,15 @@ old `~/.config/gcal-app/` are picked up automatically once):
 SKIP_SMOKE=1 ./smoke.sh    # offline half only
 ```
 
-* `--selftest` — 174 offline checks: source order, config recovery from malformed
+* `--selftest` — offline checks: source order, config recovery from malformed
   and legacy files, host policy against look-alike domains, Meet join-vs-warm-up
   classification, account URL rewriting, blank-popup handling, unread-count
   parsing, account-merge dedup (three slots, one mailbox, one badge), rail
-  selection, tint and badges, watcher gating, menu shape, split geometry and the
-  divider's hit strip, the trimming selectors and the CSSOM/CSP workarounds, and
-  that the popup panel stays constraint-free.
+  selection, tint and badges, watcher gating, menu shape, single/split geometry
+  (including the hidden zero-width rail, full-width content, selection restoration,
+  and badges updated while hidden), the divider's hit strip, the trimming
+  selectors and CSSOM/CSP workarounds, and that the popup panel stays
+  constraint-free.
 * `--domcheck` — the live verdict on both surfaces. It asserts that no visible
   Gemini/Studio launcher remains in Gmail, that the 56px Search mail control
   remains visible and hittable, and that Calendar's real text-bearing
@@ -296,10 +298,12 @@ SKIP_SMOKE=1 ./smoke.sh    # offline half only
   `--calendar --fullwidth --domdump` to measure Google's native controls.
 * `--domcontrols` — diagnostic inventory for one requested surface, including
   computed visibility, signatures, and ancestry for icon-only header controls.
-* `--smoke` — builds the real window and prints what it became: rail width, pages
-  attached and visible, popup count, notification authorisation, which mail tier
-  is live, the chrome (`titlebar=hidden fullSize=true toolbar=none`) and the icon
-  the switcher draws, then each surface's final URL and title. Reaching
+* `--smoke` — builds the real window and prints what it became: layout mode,
+  selected source, rail visibility and width, content offset and width, whether
+  content reclaims the full window, divider geometry, pages attached and visible,
+  popup count, notification authorisation, which mail tier is live, the chrome
+  (`titlebar=hidden fullSize=true toolbar=none`) and the icon the switcher draws,
+  then each surface's final URL and title. Reaching
   `Inbox (1) - you@corp - Mail` is proof of a working session, not just a loaded
   page.
 * `--popupprobe` — attaches a popup panel to the live window and fails if the
