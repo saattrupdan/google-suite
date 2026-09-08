@@ -32,6 +32,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
 
         let root = RootController(sources: runtime.config.sources)
         root.layout = runtime.config.splitLayout ? .split : .single
+        // A hidden web view is never laid out, so its DOM reports zero for
+        // everything — measuring trimming on a surface that is not on screen
+        // proves nothing. The probes show both surfaces whatever the setting is.
+        if (arguments.contains("--domcheck") || arguments.contains("--domdump"))
+            && !arguments.contains("--fullwidth") {
+            // Show both surfaces so both get laid out.
+            root.layout = .split
+            root.splitRatio = 0.5
+        }
         root.splitRatio = CGFloat(runtime.config.splitRatio)
         self.root = root
         window = AppWindow(content: root)
@@ -58,6 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
         }
         if arguments.contains("--domcheck") {
             let probe = DomCheck(pages: root.pagesByOrder)
+            probe.verbose = arguments.contains("--why")
             self.domCheck = probe
             probe.start()
         }
@@ -381,7 +391,12 @@ final class DomDump {
             for (const el of document.querySelectorAll('body *')) {
               const named = [el.getAttribute('title'), el.getAttribute('aria-label'), el.getAttribute('alt')];
               const own = el.children.length === 0 ? (el.textContent || '') : '';
-              if (![...named, own].some(v => v && re.test(v))) continue;
+              // A menu button's name usually lives in a nested span, so test the
+              // text of things that are controls even when they have children.
+              const control = ['BUTTON', 'A', 'SELECT', 'SUMMARY'].includes(el.tagName) ||
+                  ['button', 'menuitem', 'combobox', 'listbox', 'tab', 'link'].includes(el.getAttribute('role') || '');
+              const text = control ? (el.textContent || '') : own;
+              if (![...named, text].some(v => v && re.test(v))) continue;
               const img = el.tagName === 'IMG' ? el : el.querySelector('img');
               out.matches.push({...info(el), aria: (el.getAttribute('aria-label') || '').slice(0, 50),
                                 src: (img && (img.currentSrc || img.src) || '').slice(0, 70)});
@@ -433,6 +448,8 @@ final class DomDump {
 /// doing nothing.
 final class DomCheck {
     private let pages: [WebPage]
+    /// --domcheck --why: print what each rule hid, to work out what to spare.
+    var verbose = false
     private var index = 0
     private var attempt = 0
     private var attempts = 0
@@ -489,6 +506,13 @@ final class DomCheck {
                 failures.append("\(surface)/\(name): should still be visible")
             }
         }
+        if verbose, let log = report["log"] as? [String], !log.isEmpty {
+            print("   hid \(log.count) of \(report["hidden"] ?? "?"):")
+            for line in log { print("      \(line)") }
+        }
+        if let toolbar = report["toolbarControls"] as? Int, toolbar == 0 {
+            failures.append("\(surface): the toolbar row under the header is empty")
+        }
         if let left = report["headerRight"] as? Int, left > 0 {
             failures.append("\(surface): \(left) chrome control(s) still visible in the header's right side")
         }
@@ -499,7 +523,8 @@ final class DomCheck {
               + "stylesheet=\(report["sheet"] ?? "?") "
               + "hidden=\(report["hidden"] ?? "?") marked=\(report["marked"] ?? "?") "
               + "rightStrip=\(report["rightStrip"] ?? "?") "
-              + "headerRight=\(report["headerRight"] ?? "?") error=\(report["error"] ?? "?")")
+              + "headerRight=\(report["headerRight"] ?? "?") "
+              + "toolbar=\(report["toolbarControls"] ?? "?") error=\(report["error"] ?? "?")")
         if (report["injected"] as? String) != "yes" { failures.append("\(surface): trimming script never ran") }
         if (report["hidden"] as? Int ?? 0) == 0 { failures.append("\(surface): cssom pass hid nothing") }
         let error = (report["error"] as? String) ?? "none"

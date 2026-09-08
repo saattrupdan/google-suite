@@ -76,6 +76,13 @@ enum GmailChrome {
         "[aria-label=\"Create\"]",
     ]
 
+    /// A JS regex body naming controls that are the product rather than its
+    /// decoration. Both apps push their real navigation into the header's
+    /// right-hand side when a pane gets narrow, so position alone cannot tell
+    /// chrome from navigation and the positional rule needs this exception.
+    static let keepPattern = "(search|previous|next|today|change view|change date|"
+        + "jump to|date picker|main menu|main drawer|navigation|back|forward)"
+
     static func selectors(isMail: Bool) -> [String] { sharedSelectors + (isMail ? mailSelectors : calendarSelectors) }
 
     /// A stylesheet for the pages whose CSP permits it.
@@ -100,51 +107,89 @@ enum GmailChrome {
         (() => {
           const selectors = [\(list)];
           const styleCSS = \(css);
+          const keepPattern = \(jsString(keepPattern));
 
-          // Fast path, where inline styles are permitted. Written through a text
-          // node because assigning to `textContent` is a Trusted Types sink on
-          // Google's pages and throws.
-          const addSheet = () => {
-            if (!document.head || document.getElementById('suite-chrome')) return;
-            const style = document.createElement('style');
-            style.id = 'suite-chrome';
-            style.appendChild(document.createTextNode(styleCSS));
-            document.head.appendChild(style);
+          const box = (el) => el.getBoundingClientRect();
+          const labelOf = (el) => (el.getAttribute &&
+              (el.getAttribute('aria-label') || el.getAttribute('title'))) || '';
+
+          const describe = (el) => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') +
+            ' .' + (el.className || '').toString().split(/\\s+/).slice(0, 3).join('.') +
+            (labelOf(el) ? ' aria=' + labelOf(el) : '') +
+            ' [' + Math.round(box(el).x) + ',' + Math.round(box(el).y) + ',' +
+            Math.round(box(el).width) + 'w]';
+          // Position rules can take something the user needs, and "hidden=34"
+          // says nothing about which of the 34 was the search icon. --domcheck
+          // --why prints this.
+          const note = (why, el) => {
+            const log = window.__gcalChromeLog = window.__gcalChromeLog || [];
+            if (log.length < 250) log.push(why + ': ' + describe(el));
+          };
+          let reason = 'selector';
+
+          /* Whether an element takes up space. Zero size means either it is gone
+             or the page has not been laid out yet — and at documentEnd nothing
+             has been laid out, which is why an earlier version concluded that
+             every container was empty and hid the toolbars inside them. Only a
+             measured "no" counts as no; an unmeasurable subtree counts as yes. */
+          const occupiesSpace = (el, cap) => {
+            if (box(el).width >= 1) return true;
+            const kids = el.querySelectorAll('*');
+            if (kids.length > cap) return true;
+            for (const kid of kids) if (box(kid).width >= 1) return true;
+            return false;
           };
 
-          // The path that actually works on Google's strict CSP: assigning
-          // through the CSSOM is not an inline style, so it is not blocked.
           const hide = (el) => {
             if (el.dataset.suiteHidden === '1') return;
             try {
               el.dataset.suiteHidden = '1';
               el.style.setProperty('display', 'none', 'important');
               window.__gcalChromeHidden = (window.__gcalChromeHidden || 0) + 1;
+              note(reason, el);
             } catch (e) { window.__gcalChromeError = String(e); }
           };
 
+          /* Controls that happen to sit on the right but are the product, not
+             its decoration. Both apps move their real navigation into the
+             header's right-hand side when the pane gets narrow — Calendar's
+             previous/next arrows and view menu, Gmail's search collapsing to a
+             magnifier — so position alone cannot tell chrome from navigation.
+             Labels can, and they are the durable handle anyway. */
+          const isKept = (el) => {
+            for (let node = el, depth = 0; node && depth < 4; node = node.parentElement, depth++) {
+              if (node.matches && node.matches('form[role="search"], [role="search"]')) return true;
+              const label = labelOf(node);
+              if (label && new RegExp(keepPattern, 'i').test(label)) return true;
+              if (node === document.body) break;
+            }
+            return false;
+          };
+
           // A rail is often a column holding one panel. Hiding the panel leaves
-          // the column standing — 56 pt of empty strip where the rail was — so
-          // an ancestor that has nothing visible left goes too. Only narrow
-          // ancestors, so the actual content area is never in play.
+          // the column standing, so an ancestor with nothing left in it goes too
+          // — narrow ancestors only, so the content area is never in play.
           const collapse = (el) => {
             let parent = el.parentElement;
             for (let depth = 0; parent && parent.tagName !== 'BODY' && depth < 4; depth++) {
-              const box = parent.getBoundingClientRect();
-              if (box.width > 160) break;
-              let anyVisible = false;
+              const width = box(parent).width;
+              if (width > 160 || width < 1) break;
+              if (isKept(parent)) break;
+              let occupied = false;
               for (const child of parent.children) {
                 if (child.dataset.suiteHidden === '1') continue;
-                const b = child.getBoundingClientRect();
-                if (b.width > 1 && b.height > 1) { anyVisible = true; break; }
+                if (occupiesSpace(child, 200)) { occupied = true; break; }
               }
-              if (anyVisible) break;
+              if (occupied) break;
+              reason = 'collapse';
               hide(parent);
+              reason = 'selector';
               parent = parent.parentElement;
             }
           };
 
           const applyDirect = () => {
+            reason = 'selector';
             for (const sel of selectors) {
               let nodes;
               try { nodes = document.querySelectorAll(sel); } catch (e) { continue; }
@@ -158,38 +203,44 @@ enum GmailChrome {
 
           /* The header's right-hand cluster. Google parks its own controls
              there — support, settings, the apps launcher, the account picture —
-             and several of them carry no accessible name at all: the account
-             button is an <img> of a logo gif, and Gmail's support button is an
-             <img> of a question mark. No selector can name those reliably, so
-             the rule is positional: inside the top bar, within HEADER_ZONE of
-             its right edge, anything that is not part of the search box is
-             chrome. The menu/drawer button, the wordmark and search sit left of
-             that line and stay. */
+             and several carry no accessible name at all: the account button is
+             an <img> of a logo gif, Gmail's support button an <img> of a
+             question mark. Nothing a selector can name reliably, so the rule is
+             positional, with isKept() as the exception that keeps navigation. */
           const HEADER_ZONE = 360;
           const hideHeaderRight = () => {
             const bar = document.getElementById('gb') || document.querySelector('header[role="banner"]');
             if (!bar) return;
-            const keep = new Set();
-            for (const form of bar.querySelectorAll('form[role="search"], [role="search"]')) {
-              keep.add(form);
-              for (const el of form.querySelectorAll('*')) keep.add(el);
-            }
-            const limit = bar.getBoundingClientRect().right - HEADER_ZONE;
+            const barBox = box(bar);
+            if (barBox.width < 200) return;            // not laid out yet
+            const limit = barBox.right - HEADER_ZONE;
             for (const el of bar.querySelectorAll('a, button, [role="button"], img')) {
-              if (el.dataset.suiteHidden === '1' || keep.has(el)) continue;
-              const r = el.getBoundingClientRect();
+              if (el.dataset.suiteHidden === '1' || isKept(el)) continue;
+              const r = box(el);
               if (r.width < 8 || r.height < 8 || r.top > 56 || r.x < limit) continue;
               const target = el.closest('a, button, [role="button"]') || el;
+              if (isKept(target)) continue;
+              reason = 'header-zone';
               hide(target);
               collapse(target);
+              reason = 'selector';
             }
           };
+
+          const addSheet = () => {
+            if (!document.head || document.getElementById('suite-chrome')) return;
+            const style = document.createElement('style');
+            style.id = 'suite-chrome';
+            style.appendChild(document.createTextNode(styleCSS));
+            document.head.appendChild(style);
+          };
+
+          const applyDirectAll = () => { applyDirect(); hideHeaderRight(); };
 
           let queued = false;
           const run = () => {
             window.__gcalChromeRuns++;
-            // The CSSOM first: it is the part that works under a strict CSP.
-            try { applyDirect(); hideHeaderRight(); } catch (e) { window.__gcalChromeError = String(e); }
+            try { applyDirectAll(); } catch (e) { window.__gcalChromeError = String(e); }
             try { addSheet(); } catch (e) { window.__gcalChromeSheetError = String(e); }
           };
           // A web view that is not on screen yet freezes requestAnimationFrame,
@@ -209,8 +260,11 @@ enum GmailChrome {
           run();
           schedule();
           for (const delay of [400, 1200, 3000, 8000]) setTimeout(run, delay);
-          // Both apps rebuild their toolbar and rails on every navigation, so
-          // this has to keep running, not just run once.
+          // Layout, not just markup, decides what is chrome. Re-run once the page
+          // is complete so the geometry rules see real boxes.
+          if (document.readyState !== 'complete') {
+            addEventListener('load', () => { run(); setTimeout(run, 600); });
+          }
           new MutationObserver(schedule).observe(document.documentElement,
               {childList: true, subtree: true});
           return 'ok';
@@ -246,6 +300,20 @@ enum GmailChrome {
                                    '[aria-label="Ask Gemini"]', '[aria-label="Settings menu"]',
                                    '[aria-label="Switch to Tasks"]', '[aria-label="Create"]']},
         account: {mustHide: true, optional: false, selectors: ['#gb a[aria-label^="Google Account"]']},
+        // Navigation that both apps move into the header's right side when the
+        // pane is narrow: Calendar's arrows and view menu, Gmail's collapsed
+        // search. Must stay — the bug this group exists to catch is an earlier
+        // version of the positional rule hiding them.
+        // Navigation that both apps move into the header's right side when the
+        // pane is narrow: Calendar's arrows and Today, Gmail's collapsed search.
+        // Must stay — the bug this group exists to catch is the positional rule
+        // eating them, which an earlier version of it did. Labels are prefixes
+        // because the name carries the period ("Previous month") and the date
+        // ("Today, Tuesday, 8 September").
+        navControls: {mustHide: false, optional: true,
+                      selectors: ['[aria-label^="Previous"]', '[aria-label^="Next"]',
+                                  '[aria-label^="Today"]', '[aria-label^="Change View"]',
+                                  '[aria-label^="Change view"]', '[aria-label="Search mail"]']},
         gemini: {mustHide: true, optional: true,
                  selectors: ['[aria-label="Ask Gemini"]', '[aria-label="Gemini"]',
                              '[aria-label^="Try Gemini"]', '.MxSLJe', '.Pv5YRd']},
@@ -298,10 +366,21 @@ enum GmailChrome {
           keep.add(form);
           for (const el of form.querySelectorAll('*')) keep.add(el);
         }
+        const keepRe = new RegExp(\(jsString(keepPattern)), 'i');
+        const kept = (el) => {
+          for (let node = el, depth = 0; node && depth < 4; node = node.parentElement, depth++) {
+            if (keep.has(node)) return true;
+            const label = (node.getAttribute &&
+                           (node.getAttribute('aria-label') || node.getAttribute('title'))) || '';
+            if (label && keepRe.test(label)) return true;
+            if (node === document.body) break;
+          }
+          return false;
+        };
         const limit = bar.getBoundingClientRect().right - 360;
         const seen = new Set();
         for (const el of bar.querySelectorAll('a, button, [role="button"], img')) {
-          if (keep.has(el) || el.dataset.suiteHidden === '1') continue;
+          if (keep.has(el) || kept(el) || el.dataset.suiteHidden === '1') continue;
           const target = el.closest('a, button, [role="button"]') || el;
           if (seen.has(target)) continue;
           const r = target.getBoundingClientRect();
@@ -312,6 +391,20 @@ enum GmailChrome {
         }
       }
       report.headerRight = headerRight;
+      report.log = (window.__gcalChromeLog || []).slice(0, 40);
+      /* The product's own toolbar row, just under the header: Calendar's view
+         menu and arrows, Gmail's refresh and page arrows. Nothing of ours is
+         supposed to touch it — the header rule is limited to the bar, and the
+         ancestor-collapse rule refuses anything wider than 160 pt — so an
+         empty toolbar means we over-reached. */
+      let toolbar = 0;
+      for (const el of document.querySelectorAll('button, div[role="button"], [role="combobox"], [role="menu"], select')) {
+        const r = el.getBoundingClientRect();
+        if (r.top < 56 || r.top > 130 || r.width < 10 || r.height < 10) continue;
+        if (getComputedStyle(el).display === 'none') continue;
+        toolbar++;
+      }
+      report.toolbarControls = toolbar;
       return JSON.stringify(report);
     })();
     """

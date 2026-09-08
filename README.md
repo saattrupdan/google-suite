@@ -83,8 +83,25 @@ account button is an `<img>` of a logo gif and Gmail's support button is an
 they survived an earlier, label-only pass while still being clickable. The menu
 button, the wordmark and search sit left of that line and are untouched.
 
-`--domcheck` measures that zone too (`headerRight=0`), so a control that comes
-back is a failure rather than a surprise. It is still surgery
+Two exceptions keep that rule honest, both measured rather than assumed:
+
+* **Navigation is spared by name.** When a pane gets narrow, both products move
+  their real controls into the header's right side — Calendar's *Previous
+  month* / *Next month* / *Today, Tuesday, 8 September*, and Gmail's search
+  collapsing to a magnifier. A positional rule that does not know this eats the
+  arrows, which is exactly what an earlier version of it did.
+* **Nothing is hidden before it has been laid out.** At `documentEnd` every
+  element measures zero, so "this container looks empty" is not evidence — one
+  version concluded from that that the toolbars were empty and hid them. An
+  unmeasurable subtree now counts as occupied, and the pass runs again on `load`.
+
+`--domcheck` covers both: `navControls` and `toolbarControls` fail when the
+product's own navigation or the toolbar row under the header goes missing, and
+`--domcheck --why` prints what each rule hid and why (`selector`, `header-zone`,
+`collapse`) — the only practical way to find out which of 20 hidden elements was
+the one you needed. `--domdump` and `--domcheck` show both surfaces while they
+measure, because a hidden web view is never laid out and would report zeros;
+`--fullwidth` opts out. It is still surgery
 on a page the app does not control: a Google release can rename everything and
 the rules will quietly do nothing. `--domcheck` is the guard — it measures each
 thing on **every** surface and fails when something that must be gone is visible,

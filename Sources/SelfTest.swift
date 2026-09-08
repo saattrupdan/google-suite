@@ -286,6 +286,19 @@ enum SelfTest {
     private static func testGmailChromeCSS() {
         // The header rule is positional, because the account and support
         // buttons are <img> elements with no accessible name to select.
+        // Position rules may not eat the product's own navigation: at narrow
+        // widths Calendar moves its arrows and Today, and Gmail collapses search
+        // to an icon, all into the header's right-hand side.
+        for word in ["search", "previous", "next", "today", "change view"] {
+            expect(GmailChrome.keepPattern.lowercased().contains(word),
+                   "the keep list spares \(word)")
+        }
+        expect(GmailChrome.scriptSource(isMail: true).contains("isKept"),
+               "the positional rule consults the keep list")
+        expect(GmailChrome.scriptSource(isMail: true).contains("occupiesSpace"),
+               "collapsing an ancestor requires measured geometry, not a guess")
+        expect(GmailChrome.auditScript.contains("toolbarControls"),
+               "the audit fails when the toolbar row under the header is emptied")
         expect(GmailChrome.scriptSource(isMail: true).contains("hideHeaderRight"),
                "the header's right-hand cluster is hidden by position, not by name")
         for selector in ["[aria-label=\"Gemini\"]", ".Pv5YRd"] {
