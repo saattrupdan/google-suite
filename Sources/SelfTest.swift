@@ -293,6 +293,13 @@ enum SelfTest {
             expect(GmailChrome.keepPattern.lowercased().contains(word),
                    "the keep list spares \(word)")
         }
+        // Prev/next must survive by construction, not by a word list matching
+        // today: the positional rule may only hide controls with no accessible
+        // name, which is what separates Google's buttons from the product's.
+        expect(GmailChrome.scriptSource(isMail: true).contains("hasOwnName"),
+               "the positional rule spares anything that has a name")
+        expect(GmailChrome.auditScript.contains("headerHiddenNamed"),
+               "a named control hidden in the header fails the check")
         expect(GmailChrome.scriptSource(isMail: true).contains("isKept"),
                "the positional rule consults the keep list")
         expect(GmailChrome.scriptSource(isMail: true).contains("occupiesSpace"),

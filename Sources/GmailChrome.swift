@@ -156,6 +156,17 @@ enum GmailChrome {
              previous/next arrows and view menu, Gmail's search collapsing to a
              magnifier — so position alone cannot tell chrome from navigation.
              Labels can, and they are the durable handle anyway. */
+          const hasOwnName = (el) => {
+            for (let node = el, depth = 0; node && depth < 2; node = node.parentElement, depth++) {
+              if (labelOf(node)) return true;
+            }
+            const img = node => node.tagName === 'IMG' ? node : (node.querySelector && node.querySelector('img'));
+            const picture = img(el);
+            // An image only names its button if the image itself is labelled.
+            if (picture && (picture.getAttribute('alt') || '').trim()) return true;
+            return false;
+          };
+
           const isKept = (el) => {
             for (let node = el, depth = 0; node && depth < 4; node = node.parentElement, depth++) {
               if (node.matches && node.matches('form[role="search"], [role="search"]')) return true;
@@ -220,6 +231,17 @@ enum GmailChrome {
               if (r.width < 8 || r.height < 8 || r.top > 56 || r.x < limit) continue;
               const target = el.closest('a, button, [role="button"]') || el;
               if (isKept(target)) continue;
+              /* Only nameless controls. Google's own buttons here have no
+                 accessible name at all — the account button is an <img> of a
+                 logo gif, support an <img> of a question mark — while anything
+                 the product wants you to use is named: "Next month", "Today,
+                 Tuesday, 8 September", "Change view". Naming is also what
+                 survives a UI release or another language, so prev/next is
+                 protected by this rather than by a word list matching today.
+                 Named chrome we do want gone (the apps launcher, settings,
+                 Gemini) is gone by selector, where it can be listed and
+                 checked. */
+              if (hasOwnName(target)) continue;
               reason = 'header-zone';
               hide(target);
               collapse(target);
@@ -358,7 +380,15 @@ enum GmailChrome {
       // Anything still visible in the header's right-hand cluster is chrome that
       // survived. The account and support buttons are <img> with no accessible
       // name, so no selector can promise they are gone — measure instead.
-      let headerRight = 0;
+      let headerRight = 0, namedVisible = 0;
+      const hiddenNamed = [];
+      // A control is "named" when it or its picture carries an accessible name.
+      // Google's chrome here has none; the product's navigation always does.
+      const named = (el) => {
+        const pic = el.tagName === 'IMG' ? el : (el.querySelector && el.querySelector('img'));
+        if ((el.getAttribute('aria-label') || el.getAttribute('title') || '').trim()) return true;
+        return !!(pic && (pic.getAttribute('alt') || '').trim());
+      };
       const bar = document.getElementById('gb') || document.querySelector('header[role="banner"]');
       if (bar) {
         const keep = new Set();
@@ -385,12 +415,27 @@ enum GmailChrome {
           if (seen.has(target)) continue;
           const r = target.getBoundingClientRect();
           if (r.width < 8 || r.height < 8 || r.top > 56 || r.x < limit) continue;
-          if (getComputedStyle(target).display === 'none') continue;
+          if (getComputedStyle(target).display === 'none') {
+            if (named(target)) {
+              const r2 = target.getBoundingClientRect();
+              hiddenNamed.push(target.tagName.toLowerCase() +
+                  ' aria=' + ((target.getAttribute('aria-label') || target.getAttribute('title') ||
+                                (target.querySelector('img') || {}).alt || '') + '').slice(0, 40) +
+                  ' [' + Math.round(r2.x) + ',' + Math.round(r2.y) + ',' + Math.round(r2.width) + 'w]');
+            }
+            continue;
+          }
+          if (named(target)) namedVisible++;
           seen.add(target);
           headerRight++;
         }
       }
       report.headerRight = headerRight;
+      // Anything named that the product put in the header must still be there:
+      // prev/next, Today, the view menu. Nameless leftovers are chrome and are
+      // counted by headerRight.
+      report.headerNamed = namedVisible;
+      report.headerHiddenNamed = hiddenNamed.slice(0, 6);
       report.log = (window.__gcalChromeLog || []).slice(0, 40);
       /* The product's own toolbar row, just under the header: Calendar's view
          menu and arrows, Gmail's refresh and page arrows. Nothing of ours is

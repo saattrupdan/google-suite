@@ -513,6 +513,9 @@ final class DomCheck {
         if let toolbar = report["toolbarControls"] as? Int, toolbar == 0 {
             failures.append("\(surface): the toolbar row under the header is empty")
         }
+        if let named = report["headerHiddenNamed"] as? [String], !named.isEmpty {
+            failures.append("\(surface): named controls hidden in the header: " + named.joined(separator: ", "))
+        }
         if let left = report["headerRight"] as? Int, left > 0 {
             failures.append("\(surface): \(left) chrome control(s) still visible in the header's right side")
         }
