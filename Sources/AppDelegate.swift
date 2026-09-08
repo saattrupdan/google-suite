@@ -53,6 +53,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
             root.splitRatio = 0.5
         }
         root.splitRatio = CGFloat(runtime.config.splitRatio)
+        if arguments.contains("--popupprobe") {
+            // This GUI regression specifically exercises traffic-light safety
+            // with the split rail hidden; do not depend on the user's saved mode.
+            root.layout = .split
+            root.splitRatio = 0.5
+        }
         self.root = root
         window = AppWindow(content: root)
         MailWatcher.shared.page = root.pagesByOrder.first { $0.source.id == "mail" }
@@ -294,15 +300,12 @@ final class RunLoopGate {
     }
 }
 
-/// Regression test for the window collapse: attaches a popup panel the way
-/// `window.open` does and fails if the window or the web view ends up tiny. The
-/// bug was invisible in the selftest because it only happens once the window is
-/// on screen and a constraint graph update makes AppKit re-derive the window's
-/// frame from the content view's fitting size.
+/// GUI regression test for the window collapse and split traffic-light safety:
+/// attach a popup panel the way `window.open` does, then verify that the actual
+/// standard buttons live in the native strip rather than over a web pane.
 final class PopupProbe {
     private let root: RootController
     private let window: NSWindow?
-    private var deadline = Date().addingTimeInterval(15)
 
     init(root: RootController, window: NSWindow?) {
         self.root = root
@@ -322,23 +325,58 @@ final class PopupProbe {
 
     private var baseline: NSRect = .zero
 
+    private func buttonFrame(_ button: NSButton?) -> NSRect? {
+        guard let button else { return nil }
+        // NSWindow's standard buttons are not children of the content
+        // controller, but NSView conversion through the shared window maps
+        // their actual bounds into RootController coordinates.
+        return root.view.convert(button.bounds, from: button)
+    }
+
     private func dump(_ when: String) {
-        print("PROBE \(when): window=\(desc(window?.frame)) content=\(desc(root.contentFrame)) "
+        print("PROBE \(when): window=\(desc(window?.frame)) root=\(desc(root.view.bounds)) "
+              + "content=\(desc(root.contentFrame)) strip=\(desc(root.safeStripFrame)) "
               + "sidebar=\(desc(root.sidebarFrame)) popups=\(root.popupsCount) "
               + "panel=\(desc(root.popupPanelFrame)) panelWeb=\(desc(root.popupWebFrame))")
+        for (name, button) in [("close", NSWindow.ButtonType.closeButton),
+                               ("mini", .miniaturizeButton),
+                               ("zoom", .zoomButton)] {
+            let frame = buttonFrame(window?.standardWindowButton(button))
+            print("PROBE button \(name)=\(desc(frame)) intersectsStrip=\(frame.map { $0.intersects(root.safeStripFrame) } ?? false) "
+                  + "intersectsContent=\(frame.map { $0.intersects(root.contentFrame) } ?? false)")
+        }
     }
 
     private func desc(_ frame: NSRect?) -> String {
         guard let frame else { return "nil" }
-        return "\(Int(frame.width))x\(Int(frame.height))"
+        return "(x=\(Int(frame.minX.rounded())),y=\(Int(frame.minY.rounded())),w=\(Int(frame.width.rounded())),h=\(Int(frame.height.rounded())))"
     }
 
     private func finish() {
         let panel = root.popupWebFrame ?? .zero
-        let window = window?.frame ?? .zero
-        let ok = panel.width > 200 && panel.height > 200
-            && abs(window.width - baseline.width) < 2 && abs(window.height - baseline.height) < 2
-        print("PROBE \(ok ? "ok" : "FAIL: the popup collapsed the window")")
+        let currentWindow = window?.frame ?? .zero
+        let content = root.contentFrame
+        let strip = root.safeStripFrame
+        let buttons: [(String, NSWindow.ButtonType)] = [
+            ("close", .closeButton), ("mini", .miniaturizeButton), ("zoom", .zoomButton)]
+        let buttonChecks = buttons.map { name, type -> (String, Bool) in
+            guard let frame = buttonFrame(window?.standardWindowButton(type)) else { return (name, false) }
+            return (name, strip.intersects(frame) && !content.intersects(frame))
+        }
+        let buttonsOK = buttonChecks.allSatisfy { $0.1 }
+        let geometryOK = !root.safeStripIsHidden
+            && strip.minX <= root.view.bounds.minX
+            && abs(strip.width - root.view.bounds.width) < 1
+            && abs(content.minX - root.view.bounds.minX) < 1
+            && abs(content.width - root.view.bounds.width) < 1
+            && content.maxY <= strip.minY + 1
+        let popupOK = panel.width > 200 && panel.height > 200
+            && abs(currentWindow.width - baseline.width) < 2
+            && abs(currentWindow.height - baseline.height) < 2
+        let ok = geometryOK && buttonsOK && popupOK
+        print("PROBE checks: splitSafeStrip=\(geometryOK) trafficLights=\(buttonsOK) "
+              + "popupNonCollapse=\(popupOK) buttonResults=\(buttonChecks)")
+        print("PROBE \(ok ? "ok" : "FAIL: split strip/button geometry or popup collapsed")")
         exit(ok ? 0 : 1)
     }
 }

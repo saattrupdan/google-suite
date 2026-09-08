@@ -32,16 +32,18 @@ so Google does not reject it as an embedded web view.
 
 ## Interface
 
-* **No title bar.** The content runs to the top of the window and the traffic lights float
-  over the rail; drag the window by the rail or the divider. There is no toolbar either —
-  everything it could have held is in the menu bar, or gone.
+* **No traditional title bar.** In single mode the traffic lights float over the 56pt
+  rail; in split mode the rail is hidden and a shallow native strip hosts the lights above
+  both web panes. Drag the window by the rail, strip, or divider. There is no toolbar either
+  — everything it could have held is in the menu bar, or gone.
 * **Left rail** — Mail, then Calendar. Icon only; the source you are looking at is
   **blue**, the other one grey, and unread mail shows as a red badge on the envelope.
   `⌘1` / `⌘2`, or `⌃⇥` to cycle.
 * **Side by side** (`⌘\`) — Mail and Calendar split the window, both live at once. Worth
-  it on a large monitor; off by default. In split view both rail icons are blue, because
-  both are shown. **Drag the divider** to give one side more room; the split is remembered
-  (`splitRatio`), and it never goes past 80/20 either way.
+  it on a large monitor; off by default. The source rail is hidden so both web panes reclaim
+  the full width; the native traffic-light strip remains above them. **Drag the divider** to
+  give one side more room; the split is remembered (`splitRatio`), and it never goes past
+  80/20 either way.
 * **Trimmed Gmail interface** — Gmail's own label rail on the left and its Meet/Chat/Keep
   rail on the right are hidden, and its header is reduced to the menu button, the wordmark,
   search and your account picture. See [Trimming Gmail's interface](#trimming-gmails-interface).
@@ -283,8 +285,9 @@ SKIP_SMOKE=1 ./smoke.sh    # offline half only
   classification, account URL rewriting, blank-popup handling, unread-count
   parsing, account-merge dedup (three slots, one mailbox, one badge), rail
   selection, tint and badges, watcher gating, menu shape, single/split geometry
-  (including the hidden zero-width rail, full-width content, selection restoration,
-  and badges updated while hidden), the divider's hit strip, the trimming
+  (including the hidden zero-width rail, native split traffic-light strip, full-width
+  content with reduced height, restoration to the single-mode rail, and badges updated
+  while hidden), the divider's hit strip, the trimming
   selectors and CSSOM/CSP workarounds, and that the popup panel stays
   constraint-free.
 * `--domcheck` — the live verdict on both surfaces. It asserts that no visible
@@ -306,11 +309,12 @@ SKIP_SMOKE=1 ./smoke.sh    # offline half only
   then each surface's final URL and title. Reaching
   `Inbox (1) - you@corp - Mail` is proof of a working session, not just a loaded
   page.
-* `--popupprobe` — attaches a popup panel to the live window and fails if the
-  window shrinks. It exists because *"add another account"* once collapsed the
-  window to a title bar and a close button: adding constraints after the window
-  is on screen makes AppKit re-derive the frame from the content view's fitting
-  size, and a web view has no intrinsic size to derive one from.
+* `--popupprobe` — forces split mode, attaches a popup panel to the live window,
+  prints root-coordinate frames for the actual close/minimize/zoom buttons, and fails
+  if those buttons miss the native safe strip or overlap either web pane. It also retains
+  the non-collapse check: adding constraints after the window is on screen once made
+  AppKit re-derive the frame from the content view's fitting size, and a web view has no
+  intrinsic size to derive one from.
 
 CI (`.github/workflows/ci.yml`) runs on `macos-latest` and covers everything that
 needs neither a window server nor a Google session: the build, `--selftest`,

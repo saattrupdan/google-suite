@@ -5,8 +5,9 @@ final class AppWindow: NSWindowController, NSWindowDelegate {
     init(content: RootController, contentSize: NSSize = NSSize(width: 1280, height: 800)) {
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: contentSize),
-            // No title bar: the content runs to the top of the window and the
-            // traffic lights float over the rail. Everything else a title bar
+            // No traditional title bar: single mode hosts the traffic lights
+            // over the 56pt rail, while split mode supplies a shallow native
+            // safe strip above both web panes. Everything else a title bar
             // would hold — reload, open-in-browser — is in the menu bar or gone.
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
@@ -20,8 +21,8 @@ final class AppWindow: NSWindowController, NSWindowDelegate {
         window.title = Menus.appName
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        // With no title bar, the rail and the divider are what you drag
-        // the window by.
+        // With no traditional title bar, the single-mode rail, split-mode safe
+        // strip, and divider are what you drag the window by.
         window.isMovableByWindowBackground = true
         window.center()
         super.init(window: window)

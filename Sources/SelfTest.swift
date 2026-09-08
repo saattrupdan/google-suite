@@ -233,6 +233,8 @@ enum SelfTest {
         expectEqual(Int(root.contentFrame.width), 1224, "single content leaves room for the rail")
         expect(!root.sidebarIsHidden && root.sidebarSelectedID == "mail",
                "single layout shows the rail with Mail selected")
+        expect(root.safeStripIsHidden && root.safeStripFrame.height == Sidebar.topInset,
+               "single layout hides the split traffic-light strip")
 
         root.setBadge(7, for: "mail")
         root.layout = .split
@@ -240,8 +242,16 @@ enum SelfTest {
         let calendar = root.pagesByOrder[1].view.frame
         expect(root.sidebarIsHidden && root.sidebarFrame.width == 0,
                "split hides the rail and gives it a zero-width frame")
+        expect(!root.safeStripIsHidden
+               && root.safeStripFrame == NSRect(x: 0, y: 800 - Sidebar.topInset,
+                                                width: 1280, height: Sidebar.topInset),
+               "split shows the native traffic-light strip at the top")
         expectEqual(Int(root.contentFrame.minX), 0, "split content starts at the window edge")
         expectEqual(Int(root.contentFrame.width), 1280, "split content reclaims the full window width")
+        expectEqual(Int(root.contentFrame.maxY), 800 - Int(Sidebar.topInset),
+                    "split content ends below the native strip")
+        expectEqual(Int(root.pagesByOrder[0].view.frame.height), 800 - Int(Sidebar.topInset),
+                    "split surfaces use the reduced content height")
         expect(!root.pagesByOrder[0].view.isHidden && !root.pagesByOrder[1].view.isHidden,
                "split view shows both surfaces")
         expect(abs(mail.width - calendar.width) < 2 && calendar.minX >= mail.maxX,
@@ -265,8 +275,9 @@ enum SelfTest {
         expect(root.pagesByOrder[0].view.isHidden && !root.pagesByOrder[1].view.isHidden,
                "going back to one surface shows only the selected Calendar")
         expect(!root.sidebarIsHidden && root.sidebarFrame.width == 56
-               && root.contentFrame.minX == 56 && root.sidebarSelectedID == "calendar",
-               "going back restores the rail, offset, and selected state")
+               && root.safeStripIsHidden && root.contentFrame.minX == 56
+               && root.contentFrame.maxY == 800 && root.sidebarSelectedID == "calendar",
+               "going back restores the rail, strip visibility, height, offset, and selected state")
         expectEqual(root.sidebarBadgeText(for: "mail"), "7", "the badge is correct when the rail returns")
         let singleSummary = root.layoutSummary()
         expect(singleSummary.contains("layout=single") && singleSummary.contains("rail=56 railHidden=false")

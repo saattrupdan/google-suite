@@ -19,8 +19,8 @@ final class Sidebar: NSVisualEffectView {
     private(set) var items: [Item] = []
     var onSelect: ((String) -> Void)?
 
-    /// Room for the traffic lights, which sit on top of the rail now that the
-    /// window has no title bar.
+    /// Room for the traffic lights in single mode. In split mode the rail is
+    /// hidden and RootController supplies a native strip above both surfaces.
     static let topInset: CGFloat = 34
     static let itemSize = NSSize(width: 40, height: 34)
     static let spacing: CGFloat = 6
@@ -102,7 +102,8 @@ final class Sidebar: NSVisualEffectView {
         for item in items { style(item, selected: item.source.id == id) }
     }
 
-    /// Split view shows both surfaces at once, so both icons are "shown".
+    /// Retain which surfaces would be shown while the rail is hidden in split
+    /// mode. This state is painted only when single mode restores the rail.
     func setShown(ids: Set<String>) {
         for item in items { style(item, selected: ids.contains(item.source.id)) }
     }

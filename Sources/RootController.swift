@@ -25,6 +25,7 @@ final class RootController: NSViewController, NSMenuItemValidation {
     private let content = LayoutView()
     private let divider = SplitDivider()
     private var dividerLine: NSView?
+    private let splitSafeStrip = NSVisualEffectView(frame: .zero)
     private var sidebar: Sidebar!
 
     /// Popup web views we are holding open, keyed by the page that opened them.
@@ -142,6 +143,8 @@ final class RootController: NSViewController, NSMenuItemValidation {
     }
     var contentFrame: NSRect { content.frame }
     var dividerFrame: NSRect { divider.frame }
+    var safeStripFrame: NSRect { splitSafeStrip.frame }
+    var safeStripIsHidden: Bool { splitSafeStrip.isHidden }
 
     /// Exposed for the selftest: does this point, in content coordinates, land on
     /// the divider strip?
@@ -238,6 +241,13 @@ final class RootController: NSViewController, NSMenuItemValidation {
         content.wantsLayer = true
         root.addSubview(content)
         root.addSubview(sidebar)
+        // A shallow native titlebar material gives the traffic lights a safe
+        // host when the split rail is hidden. It is a normal frame-based view,
+        // so it cannot participate in the window's fitting-size constraints.
+        splitSafeStrip.material = .titlebar
+        splitSafeStrip.blendingMode = .behindWindow
+        splitSafeStrip.state = .followsWindowActiveState
+        root.addSubview(splitSafeStrip)
         content.addSubview(divider)
         view = root
         relayout()
@@ -249,13 +259,20 @@ final class RootController: NSViewController, NSMenuItemValidation {
     private func relayout() {
         let bounds = view.bounds
         let railVisible = layout == .single
+        let stripVisible = layout == .split
         sidebar.isHidden = !railVisible
         sidebar.frame = NSRect(x: 0, y: 0,
                                 width: railVisible ? Sidebar.width : 0,
                                 height: bounds.height)
+        splitSafeStrip.isHidden = !stripVisible
+        splitSafeStrip.frame = NSRect(x: 0,
+                                      y: max(0, bounds.height - Sidebar.topInset),
+                                      width: bounds.width,
+                                      height: min(bounds.height, Sidebar.topInset))
         let contentX = railVisible ? Sidebar.width : 0
+        let contentHeight = max(0, bounds.height - (stripVisible ? Sidebar.topInset : 0))
         content.frame = NSRect(x: contentX, y: 0,
-                               width: max(0, bounds.width - contentX), height: bounds.height)
+                               width: max(0, bounds.width - contentX), height: contentHeight)
 
         switch layout {
         case .single:
@@ -271,8 +288,9 @@ final class RootController: NSViewController, NSMenuItemValidation {
             sidebar.layoutSubtreeIfNeeded()
         case .split:
             divider.isHidden = false
-            // Content now owns the whole window: the ratio and drag coordinate
-            // are both based on the reclaimed width, not on a hidden 56pt rail.
+            // Content now owns the whole window width and ends below the
+            // native strip: the ratio and drag coordinate are both based on
+            // the reclaimed width, not on a hidden 56pt rail.
             let room = max(0, content.bounds.width - Self.dividerWidth)
             let first = max(0, room * splitRatio)
             pagesByOrder.enumerated().forEach { index, page in
@@ -430,7 +448,8 @@ final class RootController: NSViewController, NSMenuItemValidation {
             + "pagesAttached=\(attached)/\(pagesByOrder.count) visible=\(visible) "
             + "rail=\(railWidth) railHidden=\(sidebar.isHidden) "
             + "contentX=\(contentX) contentWidth=\(contentWidth) fullWidth=\(fullWidth) "
-            + "divider=\(divider) popups=\(popups.count)"
+            + "contentHeight=\(Int(content.frame.height.rounded())) strip=\(Int(safeStripFrame.height.rounded())) "
+            + "stripHidden=\(splitSafeStrip.isHidden) divider=\(divider) popups=\(popups.count)"
     }
 }
 
