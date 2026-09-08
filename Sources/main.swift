@@ -1,6 +1,16 @@
 import AppKit
 
 // Entry point. Argument parsing happens here and nowhere else.
+
+// Nothing below needs AppKit, so it happens before the application exists:
+// printing the JavaScript that goes into Google's pages. `node --check` on the
+// output is the only way to catch a syntax error in a string built by
+// interpolation, and CI has no window server to launch a window through.
+if CommandLine.arguments.contains("--trimscript") {
+    print(GmailChrome.scriptSource(isMail: !CommandLine.arguments.contains("--calendar")))
+    exit(0)
+}
+
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 

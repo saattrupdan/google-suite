@@ -1,0 +1,37 @@
+name: build and check
+
+on:
+  push:
+  pull_request:
+
+# Everything here runs without a window server and without a Google session.
+# The live checks (--domcheck, --domdump) need a signed-in profile and so can
+# only run on a real machine; see README, "Tests".
+jobs:
+  offline:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: swiftc --version
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Logic checks
+        run: "./Google Suite.app/Contents/MacOS/Google Suite" --selftest
+
+      - name: The JavaScript injected into Google's pages parses
+        run: |
+          set -o pipefail
+          "./Google Suite.app/Contents/MacOS/Google Suite" --trimscript \
+            | node --check /dev/stdin
+          "./Google Suite.app/Contents/MacOS/Google Suite" --trimscript --calendar \
+            | node --check /dev/stdin
+
+      - name: Bundle is well-formed
+        run: |
+          plutil -lint "Google Suite.app/Contents/Info.plist"
+          test -s "Google Suite.app/Contents/Resources/AppIcon.icns"
+          grep -q CFBundleIconFile "Google Suite.app/Contents/Info.plist"

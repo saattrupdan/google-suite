@@ -284,6 +284,16 @@ enum SelfTest {
     }
 
     private static func testGmailChromeCSS() {
+        // The header rule is positional, because the account and support
+        // buttons are <img> elements with no accessible name to select.
+        expect(GmailChrome.scriptSource(isMail: true).contains("hideHeaderRight"),
+               "the header's right-hand cluster is hidden by position, not by name")
+        for selector in ["[aria-label=\"Gemini\"]", ".Pv5YRd"] {
+            expect(GmailChrome.mailSelectors.contains(selector), "gmail hides \(selector)")
+        }
+        expect(GmailChrome.auditScript.contains("headerRight"),
+               "the audit measures the header zone, so a surviving avatar is a failure")
+
         expect(GmailChrome.makeUserScript(enabled: false, isMail: true).source.isEmpty,
                "disabled trimming injects nothing")
         let mailScript = GmailChrome.makeUserScript(enabled: true, isMail: true)

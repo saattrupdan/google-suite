@@ -44,17 +44,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation,
 
         // Smoke drives the same path as normal use, window on screen included.
         window.show()
-        if arguments.contains("--trimscript") {
-            // The exact JavaScript that goes into the page, so it can be
-            // syntax-checked outside the app when Google's markup shifts.
-            print(GmailChrome.scriptSource(isMail: !arguments.contains("--calendar")))
-            exit(0)
-        }
         if arguments.contains("--domdump") {
             // Which surface to look at; --domdump dumps the mail page.
             let id = arguments.contains("--calendar") ? "calendar" : "mail"
             let probe = DomDump(page: root.pagesByOrder.first { $0.source.id == id })
             probe.onlyRightEdge = arguments.contains("--right")
+            probe.includeImages = arguments.contains("--images")
+            if let at = arguments.firstIndex(of: "--find"), at + 1 < arguments.count {
+                probe.findTerms = Array(arguments[(at + 1)...]).filter { !$0.hasPrefix("--") }
+            }
             self.domDump = probe
             probe.start()
         }
@@ -314,8 +312,20 @@ final class DomDump {
     weak var page: WebPage?
     /// Narrow the dump to things hugging the right edge.
     var onlyRightEdge = false
+    /// Include images. The account picture is an `<img>` with no accessible
+    /// name, so a dump of labelled elements cannot see it at all.
+    var includeImages = false
+    /// Report anything whose text, title, aria-label or alt matches one of these
+    /// words — how you find a control that has no accessible name.
+    var findTerms: [String] = []
 
     init(page: WebPage?) { self.page = page }
+
+    /// A JS array literal of strings.
+    private func jsArray(_ values: [String]) -> String {
+        "[" + values.map { "\"" + $0.replacingOccurrences(of: "\\", with: "\\\\") + "\"" }
+            .joined(separator: ", ") + "]"
+    }
 
     func start() {
         guard let page else { print("DOM fail: no mail page"); exit(1) }
@@ -325,7 +335,7 @@ final class DomDump {
         }
         let js = #"""
         (() => {
-          const out = {viewport: [innerWidth, innerHeight], panels: [], header: [], hamburger: [], search: [], labeled: []};
+          const out = {viewport: [innerWidth, innerHeight], panels: [], header: [], hamburger: [], search: [], labeled: [], matches: []};
           const info = (el) => ({
             tag: el.tagName.toLowerCase(),
             cls: (el.className || '').toString().slice(0, 90),
@@ -355,12 +365,28 @@ final class DomDump {
             out.panels.push(info(el));
           }
           // Everything Google labelled: the durable handle to click on.
-          for (const el of document.querySelectorAll('[aria-label], [role="button"], [role="search"], [role="complementary"], [role="navigation"]')) {
+          const labelled = '[aria-label], [role="button"], [role="search"], [role="complementary"], [role="navigation"]'
+            + "\#(includeImages ? ", img" : "")";
+          for (const el of document.querySelectorAll(labelled)) {
             const r = el.getBoundingClientRect();
             if (r.width < 8 || r.height < 8) continue;
-            const label = el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('role') || '';
-            if (!label) continue;
-            out.labeled.push({...info(el), aria: label.slice(0, 60)});
+            const label = el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('role') ||
+                          (el.tagName === 'IMG' ? (el.alt || (el.currentSrc || el.src || '')).slice(0, 60) : '');
+            out.labeled.push({...info(el), aria: (label || '').slice(0, 60),
+                              src: (el.currentSrc || el.src || '').slice(0, 70)});
+          }
+          // A control with no accessible name at all still has a word near it.
+          for (const term of \#(jsArray(findTerms))) {
+            const re = new RegExp(term, 'i');
+            for (const el of document.querySelectorAll('body *')) {
+              const named = [el.getAttribute('title'), el.getAttribute('aria-label'), el.getAttribute('alt')];
+              const own = el.children.length === 0 ? (el.textContent || '') : '';
+              if (![...named, own].some(v => v && re.test(v))) continue;
+              const img = el.tagName === 'IMG' ? el : el.querySelector('img');
+              out.matches.push({...info(el), aria: (el.getAttribute('aria-label') || '').slice(0, 50),
+                                src: (img && (img.currentSrc || img.src) || '').slice(0, 70)});
+              if (out.matches.length > 40) break;
+            }
           }
           out.panels = out.panels.slice(0, 20);
           out.labeled = out.labeled.slice(0, 90);
@@ -385,7 +411,8 @@ final class DomDump {
                 guard let row = rowValue as? [String: Any] else { continue }
                 let rect = (row["rect"] as? [Int]) ?? []
                 let bits = rect.map(String.init).joined(separator: ",")
-                print("   \(row["tag"] ?? "?")#\(row["id"] ?? "") .\(row["cls"] ?? "") role=\(row["role"] ?? "") aria=\(row["aria"] ?? "") [\(bits)] parent=\(row["parent"] ?? "")")
+                let src = (row["src"] as? String) ?? ""
+                print("   \(row["tag"] ?? "?")#\(row["id"] ?? "") .\(row["cls"] ?? "") role=\(row["role"] ?? "") aria=\(row["aria"] ?? "") [\(bits)] parent=\(row["parent"] ?? "")" + (src.isEmpty ? "" : " src=\(src)"))
             }
         }
         print("DOM viewport: \((obj["viewport"] as? [Int] ?? []).map(String.init).joined(separator: "x"))")
@@ -394,6 +421,7 @@ final class DomDump {
         rows("hamburger", "hamburger")
         rows("search", "search")
         rows("labeled", "labelled elements")
+        rows("matches", "matches")
         exit(0)
     }
 }
@@ -461,13 +489,17 @@ final class DomCheck {
                 failures.append("\(surface)/\(name): should still be visible")
             }
         }
+        if let left = report["headerRight"] as? Int, left > 0 {
+            failures.append("\(surface): \(left) chrome control(s) still visible in the header's right side")
+        }
         if let strip = report["rightStrip"] as? Int, strip > 0 {
             failures.append("\(surface): \(strip) narrow element(s) still hold the right edge")
         }
         print("   injected=\(report["injected"] ?? "?") runs=\(report["runs"] ?? "?") "
               + "stylesheet=\(report["sheet"] ?? "?") "
               + "hidden=\(report["hidden"] ?? "?") marked=\(report["marked"] ?? "?") "
-              + "rightStrip=\(report["rightStrip"] ?? "?") error=\(report["error"] ?? "?")")
+              + "rightStrip=\(report["rightStrip"] ?? "?") "
+              + "headerRight=\(report["headerRight"] ?? "?") error=\(report["error"] ?? "?")")
         if (report["injected"] as? String) != "yes" { failures.append("\(surface): trimming script never ran") }
         if (report["hidden"] as? Int ?? 0) == 0 { failures.append("\(surface): cssom pass hid nothing") }
         let error = (report["error"] as? String) ?? "none"

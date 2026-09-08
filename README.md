@@ -75,7 +75,16 @@ Two things make this more than writing CSS, and neither is obvious:
   again on every DOM mutation, and again at fixed delays.
 
 Selectors are written against `role` and `aria-label`, measured from the live
-pages, because the obfuscated classes change every release. It is still surgery
+pages, because the obfuscated classes change every release. Where there is no
+label to select, the rule is positional: **the right-hand 360 pt of the top bar
+is Google chrome**, hidden whatever it contains. That is not laziness — the
+account button is an `<img>` of a logo gif and Gmail's support button is an
+`<img>` of a question mark, both with no accessible name at all, which is why
+they survived an earlier, label-only pass while still being clickable. The menu
+button, the wordmark and search sit left of that line and are untouched.
+
+`--domcheck` measures that zone too (`headerRight=0`), so a control that comes
+back is a failure rather than a surprise. It is still surgery
 on a page the app does not control: a Google release can rename everything and
 the rules will quietly do nothing. `--domcheck` is the guard — it measures each
 thing on **every** surface and fails when something that must be gone is visible,
@@ -90,9 +99,11 @@ never ran, and when something narrow still holds the right edge:
 ```
 
 When it reports `nothing matched`, run `--domdump` to see the current structure
-and update `Sources/GmailChrome.swift`; `--trimscript` prints the exact
-JavaScript that gets injected, so it can be `node --check`ed when a page starts
-rejecting it. To stop touching Google's pages: `"trimGmailChrome": false`.
+and update `Sources/GmailChrome.swift`. `--domdump --images` adds every image
+(avatars are pictures, not labels) and `--domdump --find Gemini` lists everything
+whose text, title, alt or label mentions a word — how a control with no name
+gets identified. `--trimscript` prints the exact JavaScript that gets injected,
+so it can be `node --check`ed when a page starts rejecting it. To stop touching Google's pages: `"trimGmailChrome": false`.
 
 ## Accounts
 
@@ -233,26 +244,37 @@ an account in Apple's Mail app.
 ## Tests
 
 ```sh
-./smoke.sh   # selftest, popup layout, live Gmail-chrome check, then smoke — each with a watchdog
+./smoke.sh    # selftest, popup-layout probe, live chrome verdict, GUI smoke — each with its own watchdog
+SKIP_SMOKE=1 ./smoke.sh    # offline half only
 ```
 
-* `--selftest` — 139 offline checks: source order, config recovery from malformed and
-  legacy files, host allow-list against look-alike domains, **Meet join-vs-warm-up
-  classification**, account URL rewriting, blank-popup handling, unread-count parsing,
-  **account-merge dedup** (three slots, one mailbox, one badge), rail selection, tint and
-  badges, watcher gating, menu shape, and that the popup panel stays constraint-free.
-* `--smoke` — builds the real window and prints what it became: layout (rail width, pages
-  attached/visible, popups), notification authorization, which mail tier is live, the user
-  the window chrome (`titlebar=hidden fullSize=true toolbar=none`) and the icon the
-  switcher will draw, then each source's final URL and title. A run that reaches
-  `Inbox (1) - you@corp - Mail` is proof of a working session, not just a loaded page.
-* `--popupprobe` — attaches a popup panel to the live window and fails if the window
-  shrinks. It exists because *"add another account"* once collapsed the window to a title
-  bar and a close button: adding constraints after the window is on screen makes AppKit
-  re-derive the window frame from the content view's fitting size, and a web view has no
-  intrinsic size to derive one from.
+* `--selftest` — 167 offline checks: source order, config recovery from malformed
+  and legacy files, host policy against look-alike domains, Meet join-vs-warm-up
+  classification, account URL rewriting, blank-popup handling, unread-count
+  parsing, account-merge dedup (three slots, one mailbox, one badge), rail
+  selection, tint and badges, watcher gating, menu shape, split geometry and the
+  divider's hit strip, the trimming selectors and the CSSOM/CSP workarounds, and
+  that the popup panel stays constraint-free.
+* `--domcheck` — the live verdict on both surfaces. Needs a signed-in profile,
+  so it runs on your machine, not in CI.
+* `--smoke` — builds the real window and prints what it became: rail width, pages
+  attached and visible, popup count, notification authorisation, which mail tier
+  is live, the chrome (`titlebar=hidden fullSize=true toolbar=none`) and the icon
+  the switcher draws, then each surface's final URL and title. Reaching
+  `Inbox (1) - you@corp - Mail` is proof of a working session, not just a loaded
+  page.
+* `--popupprobe` — attaches a popup panel to the live window and fails if the
+  window shrinks. It exists because *"add another account"* once collapsed the
+  window to a title bar and a close button: adding constraints after the window
+  is on screen makes AppKit re-derive the frame from the content view's fitting
+  size, and a web view has no intrinsic size to derive one from.
 
-Both need a logged-in GUI session.
+CI (`.github/workflows/ci.yml`) runs on `macos-latest` and covers everything that
+needs neither a window server nor a Google session: the build, `--selftest`,
+`--trimscript | node --check` for both surfaces, and a lint of the built bundle.
+The live half cannot run there, since it would need your Google login — run
+`--domcheck` yourself after a Google release, and `--domdump` when it complains.
+
 
 ## What is where
 

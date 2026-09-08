@@ -57,6 +57,10 @@ enum GmailChrome {
         "#gb .gb_L",
         "[aria-label=\"Ask Gemini\"]",
         "[aria-label^=\"Try Gemini\"]",
+        "[aria-label=\"Gemini\"]",
+        "[aria-label=\"Gemini search settings\"]",
+        ".MxSLJe",
+        ".Pv5YRd",
     ]
 
     /// Calendar. The drawer button stays — that is how you reach the list of
@@ -152,11 +156,40 @@ enum GmailChrome {
             }
           };
 
+          /* The header's right-hand cluster. Google parks its own controls
+             there — support, settings, the apps launcher, the account picture —
+             and several of them carry no accessible name at all: the account
+             button is an <img> of a logo gif, and Gmail's support button is an
+             <img> of a question mark. No selector can name those reliably, so
+             the rule is positional: inside the top bar, within HEADER_ZONE of
+             its right edge, anything that is not part of the search box is
+             chrome. The menu/drawer button, the wordmark and search sit left of
+             that line and stay. */
+          const HEADER_ZONE = 360;
+          const hideHeaderRight = () => {
+            const bar = document.getElementById('gb') || document.querySelector('header[role="banner"]');
+            if (!bar) return;
+            const keep = new Set();
+            for (const form of bar.querySelectorAll('form[role="search"], [role="search"]')) {
+              keep.add(form);
+              for (const el of form.querySelectorAll('*')) keep.add(el);
+            }
+            const limit = bar.getBoundingClientRect().right - HEADER_ZONE;
+            for (const el of bar.querySelectorAll('a, button, [role="button"], img')) {
+              if (el.dataset.gcalHidden === '1' || keep.has(el)) continue;
+              const r = el.getBoundingClientRect();
+              if (r.width < 8 || r.height < 8 || r.top > 56 || r.x < limit) continue;
+              const target = el.closest('a, button, [role="button"]') || el;
+              hide(target);
+              collapse(target);
+            }
+          };
+
           let queued = false;
           const run = () => {
             window.__gcalChromeRuns++;
             // The CSSOM first: it is the part that works under a strict CSP.
-            try { applyDirect(); } catch (e) { window.__gcalChromeError = String(e); }
+            try { applyDirect(); hideHeaderRight(); } catch (e) { window.__gcalChromeError = String(e); }
             try { addSheet(); } catch (e) { window.__gcalChromeSheetError = String(e); }
           };
           // A web view that is not on screen yet freezes requestAnimationFrame,
@@ -213,6 +246,9 @@ enum GmailChrome {
                                    '[aria-label="Ask Gemini"]', '[aria-label="Settings menu"]',
                                    '[aria-label="Switch to Tasks"]', '[aria-label="Create"]']},
         account: {mustHide: true, optional: false, selectors: ['#gb a[aria-label^="Google Account"]']},
+        gemini: {mustHide: true, optional: true,
+                 selectors: ['[aria-label="Ask Gemini"]', '[aria-label="Gemini"]',
+                             '[aria-label^="Try Gemini"]', '.MxSLJe', '.Pv5YRd']},
         hamburger: {mustHide: false, optional: true,
                     selectors: ['#gb [aria-label="Main menu"]', '#gb [aria-label="Main drawer"]']},
         wordmark: {mustHide: false, optional: true,
@@ -251,6 +287,31 @@ enum GmailChrome {
         strip++;
       }
       report.rightStrip = strip;
+      // Anything still visible in the header's right-hand cluster is chrome that
+      // survived. The account and support buttons are <img> with no accessible
+      // name, so no selector can promise they are gone — measure instead.
+      let headerRight = 0;
+      const bar = document.getElementById('gb') || document.querySelector('header[role="banner"]');
+      if (bar) {
+        const keep = new Set();
+        for (const form of bar.querySelectorAll('form[role="search"], [role="search"]')) {
+          keep.add(form);
+          for (const el of form.querySelectorAll('*')) keep.add(el);
+        }
+        const limit = bar.getBoundingClientRect().right - 360;
+        const seen = new Set();
+        for (const el of bar.querySelectorAll('a, button, [role="button"], img')) {
+          if (keep.has(el) || el.dataset.gcalHidden === '1') continue;
+          const target = el.closest('a, button, [role="button"]') || el;
+          if (seen.has(target)) continue;
+          const r = target.getBoundingClientRect();
+          if (r.width < 8 || r.height < 8 || r.top > 56 || r.x < limit) continue;
+          if (getComputedStyle(target).display === 'none') continue;
+          seen.add(target);
+          headerRight++;
+        }
+      }
+      report.headerRight = headerRight;
       return JSON.stringify(report);
     })();
     """
