@@ -665,7 +665,7 @@ enum GmailChrome {
         };
       };
       const rows = [];
-      const candidates = document.querySelectorAll('#gb a,#gb button,#gb input,#gb select,#gb summary,#gb [role],'
+      const candidates = document.querySelectorAll('#gb *,#gb,'
         + 'header[role="banner"] a,header[role="banner"] button,header[role="banner"] input,header[role="banner"] select,'
         + 'header[role="banner"] [role],body a,body button,body input,body select,body summary,body [role],body [aria-label]');
       let scanned = 0;
