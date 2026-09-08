@@ -2,5 +2,4 @@
 Google Suite.app/
 build/
 
-# Intermediate iconset; Resources/AppIcon.icns is the artifact
-tools/AppIcon.iconset/
+# The iconset and ICNS are generated assets and are checked in.
