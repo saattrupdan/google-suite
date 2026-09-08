@@ -65,16 +65,20 @@ const nestedButton = new Element('button', {}, [430, 8, 40, 40]);
 const nestedIcon = new Element('span', {class: 'Pv5YRd'}, [430, 8, 40, 40]);
 nestedButton.append(nestedIcon);
 // A release-shaped launcher: the named button and decorative SVG are siblings
-// inside the small visual wrapper, which itself sits in a broad header cluster.
-const launcherCluster = new Element('div', {class: 'header-cluster'}, [480, 0, 137, 64]);
-const launcherWrapper = new Element('div', {class: 'launcher-wrapper'}, [500, 8, 40, 40]);
-const launcherSpan = new Element('span', {}, [500, 8, 40, 40]);
-const launcherButton = new Element('button', {'aria-label': 'Ask Gemini'}, [500, 8, 40, 40]);
-const launcherSvg = new Element('svg', {viewBox: '0 0 960 960'}, [500, 8, 40, 40]);
-launcherSvg.append(new Element('path', {d: 'M480-80q-6-6-6-14'}, [500, 8, 40, 40]));
+// inside a 40px visual wrapper. Its known-class parent is deliberately also
+// compact, but contains Search/settings siblings: class and size must never let
+// promotion cross that multi-control boundary.
+const launcherCluster = new Element('div', {class: 'Zmxtcf e5IPTd'}, [480, 8, 80, 40]);
+const launcherWrapper = new Element('div', {class: 'launcher-wrapper'}, [480, 8, 40, 40]);
+const launcherSpan = new Element('span', {}, [480, 8, 40, 40]);
+const launcherButton = new Element('button', {'aria-label': 'Ask Gemini'}, [480, 8, 40, 40]);
+const launcherSvg = new Element('svg', {viewBox: '0 0 960 960'}, [480, 8, 40, 40]);
+const clusterSearch = new Element('button', {'aria-label': 'Search mail'}, [520, 8, 20, 40]);
+const clusterSettings = new Element('button', {'aria-label': 'Settings'}, [540, 8, 20, 40]);
+launcherSvg.append(new Element('path', {d: 'M480-80q-6-6-6-14'}, [480, 8, 40, 40]));
 launcherSpan.append(launcherButton);
-launcherWrapper.append(launcherSpan, new Element('div', {class: 'ekylFf'}, [500, 8, 40, 40]), launcherSvg);
-launcherCluster.append(launcherWrapper);
+launcherWrapper.append(launcherSpan, new Element('div', {class: 'ekylFf'}, [480, 8, 40, 40]), launcherSvg);
+launcherCluster.append(launcherWrapper, clusterSearch, clusterSettings);
 const viewButton = new Element('button', {text: 'Montharrow_drop_down'}, [300, 8, 120, 40]);
 const namelessChrome = new Element('button', {}, [580, 8, 30, 40]);
 const calendarFilter = new Element('button', {'aria-label': 'Filter and view'}, [270, 8, 24, 40]);
@@ -140,6 +144,11 @@ for (const target of promoted) {
 }
 check(hidden(launcherWrapper), 'production candidate set did not hide the wrapper');
 check(launcherWrapper.dataset.suiteHidden === '1', 'wrapper was not marked hidden');
+check(!hidden(clusterSearch) && !hidden(clusterSettings),
+  'known-class fallback hid Search/settings with the Gemini wrapper');
+const repeatedPromoted = h.scopedGeminiCandidates();
+check(repeatedPromoted.includes(launcherWrapper), 'repeated pass lost the marked launcher wrapper');
+check(!repeatedPromoted.includes(launcherCluster), 'repeated pass widened into the compact control cluster');
 check(!hidden(message), 'hiding launchers touched message content');
 // The positional rule has one narrow exception: the actual unnamed #gb
 // Montharrow_drop_down button. Arbitrary nameless chrome and the separate
@@ -168,4 +177,4 @@ for (let cycle = 0; cycle < 2; cycle++) {
   offscreenMenu.rect = [100, 900, 200, 160];
 }
 check(repeatedCycleEligible, 'retained off-screen menu failed on the second open cycle');
-console.log('CHROME_FIXTURES ok (23 checks)');
+console.log('CHROME_FIXTURES ok (26 checks)');

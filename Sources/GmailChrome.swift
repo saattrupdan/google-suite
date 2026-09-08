@@ -181,19 +181,21 @@ enum GmailChrome {
       // the decorative SVG in sibling branches of a 40x40 wrapper. Promote to
       // that visual wrapper, but not to its broad header parent. A normal
       // named/icon button remains its own target when it has no wrapper shape.
-      const visualLauncherAncestor = (el) => {
-        if (!hasInteractive(el)) return false;
-        // A Google header cluster can itself be only 40px high while holding
-        // Settings, account, status, and Gemini as sibling controls. A visual
-        // launcher wrapper has one interactive descendant; more than one is a
-        // cluster boundary even when its own box is deceptively small.
-        const controls = el.querySelectorAll ? Array.from(el.querySelectorAll(
-          'a,button,[role="button"],[role="menuitem"]')) : [];
-        if (controls.length > 1) return false;
-        if (controls.some(control => {
+      const launcherControls = (el) => el && el.querySelectorAll ? Array.from(
+        el.querySelectorAll('a,button,[role="button"],[role="menuitem"]')) : [];
+      const hasForeignControls = (el) => {
+        const controls = launcherControls(el);
+        if (controls.length > 1) return true;
+        return controls.some(control => {
           const name = candidateName(control);
           return name && !/gemini|studio unavailable/i.test(name);
-        })) return false;
+        });
+      };
+      const visualLauncherAncestor = (el) => {
+        if (!hasInteractive(el) || hasForeignControls(el)) return false;
+        // A Google header cluster can itself be only 40px high while holding
+        // Search, settings, account, and Gemini as sibling controls. A visual
+        // launcher wrapper has only the Gemini control plus decorative nodes.
         return hasVisualChild(el) || !!(el.querySelector && el.querySelector('svg'));
       };
       const geminiLauncherTarget = (candidate) => {
@@ -201,18 +203,20 @@ enum GmailChrome {
         if (!header) return null;
         let target = controlTarget(candidate);
         if (!target || !header.contains(target)) target = candidate;
-        let promoted = smallVisual(target) ? target : null;
+        const targetKnown = target.matches && target.matches('.Zmxtcf.e5IPTd');
+        const targetSafe = !hasForeignControls(target) && geminiEvidence(target);
+        let promoted = targetSafe && (smallVisual(target)
+          || (targetKnown && visualLauncherAncestor(target))) ? target : null;
         for (let node = target.parentElement; node && node !== header; node = node.parentElement) {
           if (!header.contains(node) || !geminiEvidence(node)) break;
-          // At documentEnd Google's launcher can still report a zero box. This
-          // measured class pair is only a fallback for that early-layout case;
-          // normal releases use the structural visualLauncherAncestor test.
+          // The measured class may compensate only for unavailable geometry;
+          // it never bypasses the single-control cluster boundary.
           const knownVisualWrapper = node.matches && node.matches('.Zmxtcf.e5IPTd');
-          if (!smallVisual(node) && !knownVisualWrapper)
-            break; // broad Google header cluster boundary
-          if (visualLauncherAncestor(node) || knownVisualWrapper) promoted = node;
+          if ((!smallVisual(node) && !knownVisualWrapper) || hasForeignControls(node))
+            break;
+          if (visualLauncherAncestor(node)) promoted = node;
         }
-        return promoted || target;
+        return promoted;
       };
       const geminiCandidate = (el) => {
         const target = controlTarget(el);
@@ -240,8 +244,8 @@ enum GmailChrome {
         // this resilient to future class renames.
         for (const node of header.querySelectorAll('.Zmxtcf.e5IPTd')) {
           if (!geminiEvidence(node)) continue;
-          const target = geminiLauncherTarget(node) || node;
-          if (!seen.has(target)) { seen.add(target); out.push(target); }
+          const target = geminiLauncherTarget(node);
+          if (target && !seen.has(target)) { seen.add(target); out.push(target); }
         }
         return out;
       };
